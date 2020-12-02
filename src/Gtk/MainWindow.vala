@@ -112,7 +112,7 @@ class MainWindow : Gtk.Window{
 		if ((App.repo == null) || !App.repo.available()){
 			if (App.backup_parent_uuid.length > 0){
 				log_debug("repo: creating from parent uuid");
-				App.repo = new SnapshotRepo.from_uuid(App.backup_parent_uuid, this, App.btrfs_mode);
+				App.repo = new SnapshotRepo.from_uuid(App.backup_parent_uuid, this, App.btrfs_mode, App.btrfs_name_root, App.btrfs_name_home);
 			}
 		}
 
@@ -891,11 +891,11 @@ class MainWindow : Gtk.Window{
 
 		if (btrfs_mode_prev != App.btrfs_mode){
 			if ((App.repo != null) && (App.repo.device != null) && (App.repo.device.uuid.length > 0)){
-				App.repo = new SnapshotRepo.from_uuid(App.repo.device.uuid, this, App.btrfs_mode);
+				App.repo = new SnapshotRepo.from_uuid(App.repo.device.uuid, this, App.btrfs_mode, App.btrfs_name_root, App.btrfs_name_home);
 			}
 			else{
 				if ((App.sys_root != null) && (App.sys_root.fstype == "btrfs")){
-					App.repo = new SnapshotRepo.from_uuid(App.sys_root.uuid, this, App.btrfs_mode);
+					App.repo = new SnapshotRepo.from_uuid(App.sys_root.uuid, this, App.btrfs_mode, App.btrfs_name_root, App.btrfs_name_home);
 				}
 				else{
 					App.repo = new SnapshotRepo.from_null();

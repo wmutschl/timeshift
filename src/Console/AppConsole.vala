@@ -688,7 +688,7 @@ public class AppConsole : GLib.Object {
 
 				if (App.btrfs_mode && !App.check_device_for_backup(dev, true)){
 					log_error(_("Selected snapshot device is not a system disk"));
-					log_error(_("Select BTRFS system disk with root subvolume (@)"));
+					log_error(_("Select BTRFS system disk with root subvolume"));
 					dev = null;
 				}
 			}
@@ -701,7 +701,8 @@ public class AppConsole : GLib.Object {
 				App.exit_app(1);
 			}
 
-			App.repo = new SnapshotRepo.from_device(dev, null, App.btrfs_mode);
+			App.repo = new SnapshotRepo.from_device(dev, null, App.btrfs_mode, App.btrfs_name_root, App.btrfs_name_home);
+						
 			if (!App.repo.available()){
 				App.exit_app(1);
 			}

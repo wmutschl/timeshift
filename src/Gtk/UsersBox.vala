@@ -326,7 +326,7 @@ class UsersBox : Gtk.Box{
 
 		if (restore_mode){
 			
-			chk_include_btrfs_home = new Gtk.CheckButton.with_label(_("Restore @home subvolume"));
+			chk_include_btrfs_home = new Gtk.CheckButton.with_label(_("Restore home subvolume"));
 
 			box.add(chk_include_btrfs_home);
 
@@ -337,7 +337,7 @@ class UsersBox : Gtk.Box{
 		}
 		else {
 
-			chk_include_btrfs_home = new Gtk.CheckButton.with_label(_("Include @home subvolume in backups"));
+			chk_include_btrfs_home = new Gtk.CheckButton.with_label(_("Include home subvolume in backups"));
 			
 			box.add(chk_include_btrfs_home);
 

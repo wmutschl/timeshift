@@ -177,7 +177,7 @@ class SnapshotBackendBox : Gtk.Box{
 
 			txt += bullet + _("Size of BTRFS snapshots are initially zero. As system files gradually change with time, data gets written to new data blocks which take up disk space (copy-on-write). Files in the snapshot continue to point to original data blocks.") + "\n\n";
 
-			txt += bullet + _("OS must be installed on a BTRFS partition with Ubuntu-type subvolume layout (@ and @home subvolumes). Other layouts are not supported.") + "\n\n";
+			txt += bullet + _("OS must be installed on a BTRFS partition with Fedora-type subvolume layout (root and home subvolumes). Other layouts are not supported.") + "\n\n";
 			
 			lbl_description.label = txt;
 		}

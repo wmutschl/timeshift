@@ -4,6 +4,8 @@
   "do_first_run" : "true",
   "btrfs_mode" : "false",
   "include_btrfs_home" : "false",
+  "btrfs_name_root" : "@",
+  "btrfs_name_home" : "@home",
   "stop_cron_emails" : "true",
   "schedule_monthly" : "false",
   "schedule_weekly" : "false",

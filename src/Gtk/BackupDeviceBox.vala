@@ -425,7 +425,7 @@ class BackupDeviceBox : Gtk.Box{
 		log_msg("selected device: %s".printf(pi.device));
 		log_debug("fstype: %s".printf(pi.fstype));
 
-		App.repo = new SnapshotRepo.from_device(pi, parent_window, App.btrfs_mode);
+		App.repo = new SnapshotRepo.from_device(pi, parent_window, App.btrfs_mode, App.btrfs_name_root, App.btrfs_name_home);
 
 		if (pi.fstype == "luks"){
 			
@@ -442,7 +442,7 @@ class BackupDeviceBox : Gtk.Box{
 					log_debug("has linux filesystem: %s".printf(dev.children[0].fstype));
 					log_msg("selecting child device: %s".printf(dev.children[0].device));
 						
-					App.repo = new SnapshotRepo.from_device(dev.children[0], parent_window, App.btrfs_mode);
+					App.repo = new SnapshotRepo.from_device(dev.children[0], parent_window, App.btrfs_mode, App.btrfs_name_root, App.btrfs_name_home);
 					tv_devices_refresh();
 				}
 				else{

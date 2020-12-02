@@ -39,6 +39,8 @@ public class Subvolume : GLib.Object{
 	public int64 unshared_bytes = 0;
 
 	public string mount_path = "";
+	public string btrfs_name_root;
+	public string btrfs_name_home;
 
 	//parent
 	public SnapshotRepo? repo;
@@ -49,7 +51,7 @@ public class Subvolume : GLib.Object{
 		this.path = path;
 		this.device_uuid = parent_dev_uuid;
 		this.repo = parent_repo;
-
+		
 		if (repo != null){
 			this.mount_path = repo.mount_paths[name];
 		}
@@ -124,11 +126,11 @@ public class Subvolume : GLib.Object{
 	public bool remove(){
 
 		if (is_system_subvolume){
-			if (name == "@"){
-				path = path_combine("/run/timeshift/backup", "@");
+			if (name == btrfs_name_root){
+				path = path_combine("/run/timeshift/backup", btrfs_name_root);
 			}
-			else if (name == "@home"){
-				path = path_combine("/run/timeshift/backup-home", "@home");
+			else if (name == btrfs_name_home){
+				path = path_combine("/run/timeshift/backup-home", btrfs_name_home);
 			}
 		}
 		
@@ -144,14 +146,18 @@ public class Subvolume : GLib.Object{
 		
 		subpath = path_combine(path, name);
 		if (dir_exists(subpath)) { // there is a nested subvol to remove first
-			cmd = "btrfs subvolume delete %s '%s'".printf(options, subpath);
-			log_debug("Deleting nested subvolume in snapshot");
-			log_debug(cmd);
+			cmd = "%s '%s'".printf("stat --format=%i",subpath);
 			ret_val = exec_sync(cmd, out std_out, out std_err);
-			if (ret_val != 0){
-				log_error(std_err);
-				log_error(_("Failed to delete snapshot nested subvolume") + ": '%s'".printf(path));
-				return false;
+			if (ret_val == 256){ //this is a subvol identified by inode number 256, otherwise it is a folder with the same name
+				cmd = "btrfs subvolume delete %s '%s'".printf(options, subpath);
+				log_debug("Deleting nested subvolume in snapshot");
+				log_debug(cmd);
+				ret_val = exec_sync(cmd, out std_out, out std_err);
+				if (ret_val != 0){
+					log_error(std_err);
+					log_error(_("Failed to delete snapshot nested subvolume") + ": '%s'".printf(path));
+					return false;
+				}
 			}
 		}
 		

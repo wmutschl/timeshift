@@ -522,7 +522,7 @@ class RestoreDeviceBox : Gtk.Box{
 			var title = _("Unsupported Subvolume Layout")
 				+ " (%s)".printf(App.dst_root.device);
 			var msg = _("Partition has an unsupported subvolume layout.") + " ";
-			msg += _("Only ubuntu-type layouts with @ and @home subvolumes are currently supported.") + "\n\n";
+			msg += _("Only Fedora-type layouts with root and home subvolumes are currently supported.") + "\n\n";
 			gtk_messagebox(title, msg, parent_window, true);
 			return false;
 		}
