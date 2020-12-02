@@ -430,12 +430,12 @@ class SnapshotListBox : Gtk.Box{
 			
 			int64 size = 0;
 			
-			if (bak.subvolumes.has_key("@")){
-				size += bak.subvolumes["@"].total_bytes;
+			if (bak.subvolumes.has_key(bak.btrfs_name_root)){
+				size += bak.subvolumes[bak.btrfs_name_root].total_bytes;
 			}
 			
-			if (bak.subvolumes.has_key("@home")){
-				size += bak.subvolumes["@home"].total_bytes;
+			if (bak.subvolumes.has_key(bak.btrfs_name_home)){
+				size += bak.subvolumes[bak.btrfs_name_home].total_bytes;
 			}
 			
 			ctxt.text = format_file_size(size);
@@ -466,11 +466,11 @@ class SnapshotListBox : Gtk.Box{
 			
 			int64 size = 0;
 			
-			if (bak.subvolumes.has_key("@")){
-				size += bak.subvolumes["@"].unshared_bytes;
+			if (bak.subvolumes.has_key(bak.btrfs_name_root)){
+				size += bak.subvolumes[bak.btrfs_name_root].unshared_bytes;
 			}
-			if (bak.subvolumes.has_key("@home")){
-				size += bak.subvolumes["@home"].unshared_bytes;
+			if (bak.subvolumes.has_key(bak.btrfs_name_home)){
+				size += bak.subvolumes[bak.btrfs_name_home].unshared_bytes;
 			}
 			
 			ctxt.text = format_file_size(size);

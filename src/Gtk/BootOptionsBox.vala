@@ -195,7 +195,7 @@ class BootOptionsBox : Gtk.Box{
 		}
 		else{
 			if (App.snapshot_to_restore.distro.dist_id == "fedora"){
-				// grub2-install should never be run on EFI fedora systems
+				// grub2-install should never be run on EFI Fedora systems
 				chk_reinstall_grub.sensitive = false;
 			}
 		}

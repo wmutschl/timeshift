@@ -265,7 +265,7 @@ class RestoreWindow : Gtk.Window{
 
 		if (App.btrfs_mode){
 			
-			if (App.snapshot_to_restore.subvolumes.has_key("@home")){
+			if (App.snapshot_to_restore.subvolumes.has_key("home")){
 				
 				notebook.page = Tabs.USERS;
 			}

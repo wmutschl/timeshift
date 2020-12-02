@@ -36,6 +36,8 @@ public class SnapshotRepo : GLib.Object{
 	public string mount_path = "";
 	public Gee.HashMap<string,string> mount_paths;
 	public bool btrfs_mode = false;
+	public string btrfs_name_root = "";
+	public string btrfs_name_home = "";
 
 	public Gee.ArrayList<Snapshot?> snapshots;
 	public Gee.ArrayList<Snapshot?> invalid_snapshots;
@@ -50,7 +52,7 @@ public class SnapshotRepo : GLib.Object{
 	private bool thr_running = false;
 	private string thr_args1 = "";
 
-	public SnapshotRepo.from_path(string path, Gtk.Window? parent_win, bool _btrfs_mode){
+	public SnapshotRepo.from_path(string path, Gtk.Window? parent_win, bool _btrfs_mode, string _btrfs_name_root, string _btrfs_name_home){
 
 		log_debug("SnapshotRepo: from_path()");
 		
@@ -60,10 +62,12 @@ public class SnapshotRepo : GLib.Object{
 		this.mount_path = path;
 		this.parent_window = parent_win;
 		this.btrfs_mode = _btrfs_mode;
+		this.btrfs_name_root = _btrfs_name_root;
+		this.btrfs_name_home = _btrfs_name_home;
 		
 		snapshots = new Gee.ArrayList<Snapshot>();
 		invalid_snapshots = new Gee.ArrayList<Snapshot>();
-		mount_paths = new Gee.HashMap<string,string>();
+		mount_paths = new Gee.HashMap<string,string>();		
 		
 		//log_debug("Selected snapshot repo path: %s".printf(path));
 		
@@ -80,7 +84,7 @@ public class SnapshotRepo : GLib.Object{
 		check_status();
 	}
 
-	public SnapshotRepo.from_device(Device dev, Gtk.Window? parent_win, bool btrfs_repo){
+	public SnapshotRepo.from_device(Device dev, Gtk.Window? parent_win, bool btrfs_repo, string _btrfs_name_root, string _btrfs_name_home){
 
 		log_debug("SnapshotRepo: from_device(): %s".printf(btrfs_repo ? "BTRFS" : "RSYNC"));
 		
@@ -88,6 +92,8 @@ public class SnapshotRepo : GLib.Object{
 		//this.use_snapshot_path_custom = false;
 		this.parent_window = parent_win;
 		this.btrfs_mode = btrfs_repo;
+		this.btrfs_name_root = _btrfs_name_root;
+		this.btrfs_name_home = _btrfs_name_home;
 		
 		snapshots = new Gee.ArrayList<Snapshot>();
 		invalid_snapshots = new Gee.ArrayList<Snapshot>();
@@ -96,7 +102,7 @@ public class SnapshotRepo : GLib.Object{
 		init_from_device();
 	}
 
-	public SnapshotRepo.from_uuid(string uuid, Gtk.Window? parent_win, bool btrfs_repo){
+	public SnapshotRepo.from_uuid(string uuid, Gtk.Window? parent_win, bool btrfs_repo, string _btrfs_name_root, string _btrfs_name_home){
 
 		log_debug("SnapshotRepo: from_uuid(): %s".printf(btrfs_repo ? "BTRFS" : "RSYNC"));
 		log_debug("uuid=%s".printf(uuid));
@@ -110,6 +116,8 @@ public class SnapshotRepo : GLib.Object{
 		//this.use_snapshot_path_custom = false;
 		this.parent_window = parent_win;
 		this.btrfs_mode = btrfs_repo;
+		this.btrfs_name_root = _btrfs_name_root;
+		this.btrfs_name_home = _btrfs_name_home;
 		
 		snapshots = new Gee.ArrayList<Snapshot>();
 		invalid_snapshots = new Gee.ArrayList<Snapshot>();
@@ -195,31 +203,31 @@ public class SnapshotRepo : GLib.Object{
 		}
 
 		// rsync
-		mount_paths["@"] = "";
-		mount_paths["@home"] = "";
+		mount_paths[btrfs_name_root] = "";
+		mount_paths[btrfs_name_home] = "";
 			
-		if (btrfs_mode){
-			
-			mount_paths["@"] = mount_path;
-			mount_paths["@home"] = mount_path; //default
+		if (btrfs_mode){			
+			log_msg("mount_path %s".printf(mount_path));
+			mount_paths[btrfs_name_root] = mount_path;
+			mount_paths[btrfs_name_home] = mount_path; //default			
 			device_home = device; //default
 			
-			// mount @home if on different disk -------
+			// mount home if on different disk -------
 		
-			var repo_subvolumes = Subvolume.detect_subvolumes_for_system_by_path(path_combine(mount_path,"@"), this, parent_window);
+			var repo_subvolumes = Subvolume.detect_subvolumes_for_system_by_path(path_combine(mount_path,btrfs_name_root), this, parent_window);
 			
-			if (repo_subvolumes.has_key("@home")){
+			if (repo_subvolumes.has_key(btrfs_name_home)){
 				
-				var subvol = repo_subvolumes["@home"];
+				var subvol = repo_subvolumes[btrfs_name_home];
 				
 				if (subvol.device_uuid != device.uuid){
 					
-					// @home is on a separate device
+					// home is on a separate device
 					device_home = subvol.get_device();
 					
-					mount_paths["@home"] = unlock_and_mount_device(device_home, "/run/timeshift/backup-home");
+					mount_paths["home"] = unlock_and_mount_device(device_home, "/run/timeshift/backup-home");
 					
-					if (mount_paths["@home"].length == 0){
+					if (mount_paths["home"].length == 0){
 						return false;
 					}
 				}
@@ -556,13 +564,13 @@ public class SnapshotRepo : GLib.Object{
 		
 		log_debug("SnapshotRepo: has_btrfs_system()");
 
-		var root_path = path_combine(mount_paths["@"],"@");
+		var root_path = path_combine(mount_paths[btrfs_name_root],btrfs_name_root);
 		log_debug("root_path=%s".printf(root_path));
 		log_debug("btrfs_mode=%s".printf(btrfs_mode.to_string()));
 		if (btrfs_mode){
 			if (!dir_exists(root_path)){
 				status_message = _("Selected snapshot device is not a system disk");
-				status_details = _("Select BTRFS system disk with root subvolume (@)");
+				status_details = _("Select BTRFS system disk with root subvolume");
 				status_code = SnapshotLocationStatus.NO_BTRFS_SYSTEM;
 				log_debug(status_message);
 				return false;
@@ -652,7 +660,7 @@ public class SnapshotRepo : GLib.Object{
 		//log_msg("");
 		
 		if (device == null){
-			log_msg("%-6s : %s".printf(_("Device"), _("Not Selected")));
+			log_msg("%-6s : %s".printf(_("Device"), _("Not Selected")));			
 		}
 		else{
 			log_msg("%-6s : %s".printf(_("Device"), device.device_name_with_parent));
@@ -1057,7 +1065,7 @@ public enum SnapshotLocationStatus{
 	 3 - first snapshot not taken, disk space sufficient
 	 4 - path is readonly
      5 - hardlinks not supported
-     6 - btrfs device does not have @ subvolume
+     6 - btrfs device does not have root subvolume
 	*/
 	NOT_SELECTED = -2,
 	NOT_AVAILABLE = -1,
