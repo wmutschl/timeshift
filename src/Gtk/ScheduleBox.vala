@@ -42,6 +42,9 @@ class ScheduleBox : Gtk.Box{
 	private Gtk.SizeGroup sg_count;
 
 	private Gtk.CheckButton chk_cron;
+	private Gtk.CheckButton chk_package;
+	private Gtk.SpinButton spin_package;
+	private Gtk.Label lbl_package;
 	
 	private Gtk.Window parent_window;
 	
@@ -108,6 +111,24 @@ class ScheduleBox : Gtk.Box{
 		spin_b.value_changed.connect(()=>{
 			App.count_boot = (int) spin_b.get_value();
 		});
+
+		// package manager
+
+		add_schedule_option(this, Tags.Package, _("Create one before packages are installed, upgraded or removed"), out chk_package, out spin_package);
+
+		spin_package.set_value(App.count_package);
+		spin_package.value_changed.connect(()=>{
+			App.count_package = (int) spin_package.get_value();
+		});
+
+		lbl_package = new Gtk.Label("");
+		lbl_package.set_use_markup(true);
+		lbl_package.xalign = 0.0f;
+		lbl_package.wrap = true;
+		lbl_package.wrap_mode = Pango.WrapMode.WORD;
+		lbl_package.margin_start = 30;
+		lbl_package.margin_end = 6;
+		add(lbl_package);
 
 		// cron emails --------------------------------------------------------------------
 		
@@ -237,6 +258,7 @@ class ScheduleBox : Gtk.Box{
 		
         var txt = "<b>%s</b>".printf(period.localized_name());
 		Gtk.CheckButton check = add_checkbox(hbox, txt);
+		check.set_tooltip_text(period_desc);
 		chk = check;
 		sg_title.add_widget(chk);
 
@@ -266,7 +288,37 @@ class ScheduleBox : Gtk.Box{
 		spin = spin2;
 	}
 
+	// the package manager option is only available in BTRFS mode
+	public void refresh_package_option(){
+
+		string pm = PackageManagerHooks.get_package_manager();
+		string msg = "";
+		bool available = App.btrfs_mode && (pm.length > 0);
+
+		if (!App.btrfs_mode){
+			msg = _("Only available in BTRFS mode");
+		}
+		else if (pm == "apt"){
+			msg = _("Snapshots are created when APT is used, e.g. by apt, the software updater or the software manager. The comment shows the package operation.");
+		}
+		else if ((pm == "dnf") && PackageManagerHooks.dnf_actions_plugin_installed()){
+			msg = _("Snapshots are created when DNF is used, e.g. by dnf or GNOME Software. The comment shows the package operation.");
+		}
+		else if (pm == "dnf"){
+			msg = _("Install the package libdnf5-plugin-actions to create snapshots before DNF transactions.");
+		}
+		else{
+			msg = _("No supported package manager (APT or DNF) was found");
+		}
+
+		chk_package.sensitive = available;
+		spin_package.sensitive = available;
+		lbl_package.label = "<i>%s</i>".printf(escape_html(msg));
+	}
+
 	public void update_statusbar(){
+
+		refresh_package_option();
 		
 		if (App.scheduled){
 
@@ -275,6 +327,14 @@ class ScheduleBox : Gtk.Box{
 			
 			set_shield_label(_("Scheduled snapshots are enabled"));
 			set_shield_subnote(_("Snapshots will be created at selected intervals if snapshot disk has enough space (> 1 GB)"));
+		}
+		else if (App.btrfs_mode && (Tags.Package in App.schedule)){
+
+			img_shield.surface = IconManager.lookup_surface(IconManager.SHIELD_MED,
+				IconManager.SHIELD_ICON_SIZE, img_shield.scale_factor);
+
+			set_shield_label(_("Snapshots before package operations are enabled"));
+			set_shield_subnote(_("Select the intervals for creating scheduled snapshots"));
 		}
 		else{
 			img_shield.surface = IconManager.lookup_surface(IconManager.SHIELD_LOW,

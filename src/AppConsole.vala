@@ -51,6 +51,10 @@ public class AppConsole : GLib.Object {
 
 	public int snapshot_list_start_index = 0;
 
+	// package manager hook mode (--package-hook)
+	private static PackageTransaction? package_transaction = null;
+	private static int package_frontend_pid = 0;
+
 	public static int main (string[] args) {
 		
 		set_locale();
@@ -76,6 +80,15 @@ public class AppConsole : GLib.Object {
 		}
 
 		Main.setup_env();
+
+		if ((args.length > 2) && (args[1].down() == "--package-hook")){
+			// read the transaction first: APT waits until the hook has read its input.
+			// Messages go to stderr: the DNF5 actions plugin interprets stdout.
+			string pid_arg = (args.length > 3) ? args[3] : "";
+			package_transaction = PackageManagerHooks.read_transaction(args[2].down(), pid_arg);
+			package_frontend_pid = PackageManagerHooks.get_frontend_pid(args[2].down(), pid_arg);
+			Posix.dup2(2, 1);
+		}
 
 		LOG_ENABLE = false;
 		init_tmp();
@@ -213,6 +226,14 @@ public class AppConsole : GLib.Object {
 					App.parse_cmd_tags(args[++k]);
 					break;
 
+				case "--package-hook":
+					LOG_TIMESTAMP = false;
+					LOG_DEBUG = false;
+					App.app_mode = "package-hook";
+					App.cmd_scripted = true;
+					k = args.length; // the remaining arguments belong to the hook
+					break;
+
 				case "--debug":
 					LOG_COMMANDS = true;
 					LOG_DEBUG = true;
@@ -315,6 +336,10 @@ public class AppConsole : GLib.Object {
 				is_success = create_snapshot(true);
 				return is_success;
 
+			case "package-hook":
+				create_package_snapshot();
+				return true; // never fail the package manager
+
 			case "list-snapshots":
 				LOG_ENABLE = true;
 
@@ -371,7 +396,7 @@ public class AppConsole : GLib.Object {
 		msg += "  --check                    " + _("Create snapshot if scheduled") + "\n";
 		msg += "  --create                   " + _("Create snapshot (even if not scheduled)") + "\n";
 		msg += "  --comments <string>        " + _("Set snapshot description") + "\n";
-		msg += "  --tags {O,B,H,D,W,M}       " + _("Add tags to snapshot (default: O)") + "\n";;
+		msg += "  --tags {O,B,H,D,W,M,P}     " + _("Add tags to snapshot (default: O)") + "\n";;
 		msg += "\n";
 		msg += _("Restore") + ":\n";
 		msg += "  --restore                  " + _("Restore snapshot") + "\n";
@@ -612,6 +637,32 @@ public class AppConsole : GLib.Object {
 	private bool create_snapshot(bool ondemand){
 		select_snapshot_device(false);
 		return App.create_snapshot(ondemand, null);
+	}
+
+	// called by the APT and DNF5 hooks before packages are installed, upgraded or removed
+	private void create_package_snapshot(){
+
+		if (App.live_system() || PackageManagerHooks.in_chroot()){
+			return;
+		}
+
+		if (!App.btrfs_mode || !(Tags.Package in App.schedule)){
+			log_debug("Snapshots before package operations are disabled");
+			return;
+		}
+
+		if ((package_frontend_pid > 0) && PackageManagerHooks.check_and_record_frontend(package_frontend_pid)){
+			log_msg(_("A snapshot was already created for this package operation."));
+			return;
+		}
+
+		string desc = (package_transaction != null) ? package_transaction.get_description() : "";
+
+		App.cmd_comments = (desc.length > 0) ? "Before %s".printf(desc) : "Before package operation";
+		App.cmd_tags = Tags.Package;
+
+		select_snapshot_device(false);
+		App.create_snapshot(true, null);
 	}
 	
 	// restore

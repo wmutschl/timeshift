@@ -110,6 +110,7 @@ class SettingsWindow : Gtk.Window{
 
 		backend_box.type_changed.connect(()=>{
 			backup_dev_box.refresh();
+			schedule_box.refresh_package_option();
 			users_box.refresh();
 			subvolume_box.refresh();
 			// refresh() shows the boxes, hide them afterwards

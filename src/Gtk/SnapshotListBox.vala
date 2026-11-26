@@ -288,20 +288,16 @@ class SnapshotListBox : Gtk.Box{
 						return true;
 					}
 					else if (column == col_desc){
-						tooltip.set_markup(_("<b>Comments</b> (double-click to edit)") + "\n" + _("Snapshots with comments are not auto-deleted"));
+						tooltip.set_markup(_("<b>Comments</b> (double-click to edit)") + "\n" + _("Snapshots with comments are not auto-deleted, except snapshots created before package operations"));
 						return true;
 					}
 					else if (column == col_tags){
-						tooltip.set_markup(
-							"<b>%s</b>\n\nO \t%s\nB \t%s\nH \t%s\nD \t%s\nW \t%s\nM \t%s".printf(
-								_("Snapshot Levels"),
-								_("On demand (manual)"),
-								_("Boot"),
-								_("Hourly"),
-								_("Daily"),
-								_("Weekly"),
-								_("Monthly"))
-						);
+						string txt = "<b>%s</b>\n".printf(_("Snapshot Levels"));
+						Tags[] levels = { Tags.OnDemand, Tags.Boot, Tags.Hourly, Tags.Daily, Tags.Weekly, Tags.Monthly, Tags.Package };
+						foreach(Tags level in levels){
+							txt += "\n%c \t%s".printf(level.letter(), escape_html(level.localized_name()));
+						}
+						tooltip.set_markup(txt);
 						return true;
 					}
 				}

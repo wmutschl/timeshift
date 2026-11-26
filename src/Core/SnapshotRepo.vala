@@ -652,6 +652,20 @@ public class SnapshotRepo : GLib.Object{
 			}
 		}
 
+		// remove tags from older backups - package manager --------------
+		// by count only: their comment is the package operation, not a user comment
+
+		list = get_snapshots_by_tag(Tags.Package);
+
+		if (list.size > App.count_package){
+			log_msg(_("Maximum backups exceeded for backup level") + " '%s'".printf(Tags.Package.name()));
+			while (list.size > App.count_package){
+				list[0].remove_tag(Tags.Package);
+				log_msg(_("Snapshot") + " '%s' ".printf(list[0].name) + _("un-tagged") + " '%s'".printf(Tags.Package.name()));
+				list = get_snapshots_by_tag(Tags.Package);
+			}
+		}
+
 		// remove tags from older backups - hourly, daily, weekly, monthly ---------
 
 		Tags levels = Tags.Hourly | Tags.Daily | Tags.Weekly | Tags.Monthly;

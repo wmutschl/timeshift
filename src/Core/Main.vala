@@ -104,6 +104,7 @@ public class Main : GLib.Object{
 	public int count_daily = 5;
 	public int count_hourly = 6;
 	public int count_boot = 5;
+	public int count_package = 5;
 
 	// pause snapshots - use snapshots_paused to query this
 	private string pause_snapshots_this_boot = ""; // if the string contains the current /proc/sys/kernel/random/boot_id: enabled; else: disabled
@@ -289,6 +290,11 @@ public class Main : GLib.Object{
 
 				string title = _("Scheduled snapshot in progress...");
 				gtk_messagebox(title, msg, null, true);
+			}
+			else if (app_mode == "package-hook"){
+				// the package manager must not fail because of Timeshift
+				log_msg(_("No snapshot was created before this package operation because Timeshift is already running."));
+				exit(0);
 			}
 			else{
 				//already logged - do nothing
@@ -865,6 +871,10 @@ public class Main : GLib.Object{
 					app_mode = "ondemand";
 					break;
 
+				case "--package-hook":
+					app_mode = "package-hook";
+					break;
+
 				case "--list":
 				case "--list-snapshots":
 					app_mode = "list-snapshots";
@@ -1337,7 +1347,7 @@ public class Main : GLib.Object{
 	
 	public bool scheduled{
 		get{
-			return !live_system() && (schedule > 0);
+			return !live_system() && schedule.contains_any(Tags.Timed);
 		}
 	}
 
@@ -1655,9 +1665,9 @@ public class Main : GLib.Object{
 
 		DateTime dt_filter = null;
 
-		// if this is not a "ondemand" snapshot, we can check if there is another recent snapshot
-		// that we can repurpose/retag
-		if (!(Tags.OnDemand in tags) && App.app_mode != "ondemand"){
+		// if this is not a "ondemand" or package snapshot, we can check if there is another recent
+		// snapshot that we can repurpose/retag
+		if (!tags.contains_any(Tags.OnDemand | Tags.Package) && App.app_mode != "ondemand"){
 			if(Tags.Boot in tags) {
 				dt_filter = dt_sys_boot;
 			}
@@ -1668,6 +1678,7 @@ public class Main : GLib.Object{
 			// find a recent backup that can be used
 			Snapshot backup_to_rotate = null;
 			foreach(var bak in repo.snapshots){
+				if (Tags.Package in bak.tags){ continue; } // keep package snapshots separate
 				if (bak.date.compare(dt_filter) > 0){
 					backup_to_rotate = bak;
 					break;
@@ -3778,12 +3789,14 @@ public class Main : GLib.Object{
 		config.set_string_member("schedule_daily",  (Tags.Daily in App.schedule).to_string());
 		config.set_string_member("schedule_hourly",  (Tags.Hourly in App.schedule).to_string());
 		config.set_string_member("schedule_boot",  (Tags.Boot in App.schedule).to_string());
+		config.set_string_member("schedule_package",  (Tags.Package in App.schedule).to_string());
 
 		config.set_string_member("count_monthly", count_monthly.to_string());
 		config.set_string_member("count_weekly", count_weekly.to_string());
 		config.set_string_member("count_daily", count_daily.to_string());
 		config.set_string_member("count_hourly", count_hourly.to_string());
 		config.set_string_member("count_boot", count_boot.to_string());
+		config.set_string_member("count_package", count_package.to_string());
 
 		if (repo.available() && repo.has_snapshots())
 		{
@@ -3904,12 +3917,14 @@ public class Main : GLib.Object{
 		Tags.set_value(ref this.schedule, Tags.Daily, json_get_bool(config,"schedule_daily", Tags.Daily in schedule));
 		Tags.set_value(ref this.schedule, Tags.Hourly, json_get_bool(config,"schedule_hourly", Tags.Hourly in schedule));
 		Tags.set_value(ref this.schedule, Tags.Boot, json_get_bool(config,"schedule_boot", Tags.Boot in schedule));
+		Tags.set_value(ref this.schedule, Tags.Package, json_get_bool(config,"schedule_package", Tags.Package in schedule));
 
 		this.count_monthly = json_get_int(config,"count_monthly",count_monthly);
 		this.count_weekly = json_get_int(config,"count_weekly",count_weekly);
 		this.count_daily = json_get_int(config,"count_daily",count_daily);
 		this.count_hourly = json_get_int(config,"count_hourly",count_hourly);
 		this.count_boot = json_get_int(config,"count_boot",count_boot);
+		this.count_package = json_get_int(config,"count_package",count_package);
 
 		this.date_format = json_get_string(config, "date_format", date_format_default);
 
@@ -4875,6 +4890,9 @@ public class Main : GLib.Object{
 	public void cron_job_update(){
 		
 		if (live_system()) { return; }
+
+		// snapshots before package manager transactions, BTRFS mode only
+		PackageManagerHooks.update(btrfs_mode && (Tags.Package in schedule));
 
 		// remove entries created by previous versions -----------
 		
