@@ -1403,7 +1403,28 @@ public class Main : GLib.Object{
 		return status;
 	}
 
-	private bool create_snapshot_for_tags(Tags tags, DateTime dt_created){
+	private DateTime get_unique_snapshot_time(DateTime dt_created){
+
+		DateTime dt = dt_created;
+
+		for (int retry = 0; retry < 10; retry++){
+
+			string name = dt.format("%Y-%m-%d_%H-%M-%S");
+
+			if (!dir_exists(path_combine(repo.snapshots_path, name))){
+				break;
+			}
+
+			log_debug("Snapshot '%s' exists already, waiting for the next second".printf(name));
+
+			Thread.usleep(500000);
+			dt = new DateTime.now_local();
+		}
+
+		return dt;
+	}
+
+	private bool create_snapshot_for_tags(Tags tags, DateTime dt_requested){
 
 		log_debug("Main: backup_and_rotate()");
 
@@ -1466,6 +1487,11 @@ public class Main : GLib.Object{
 			log_error("Backup location not mounted");
 			exit_app();
 		}
+
+		// snapshot names have a resolution of one second, make sure that two
+		// snapshots created in quick succession don't end up with the same name
+
+		DateTime dt_created = get_unique_snapshot_time(dt_requested);
 
 		// create new snapshot -----------------------
 		Snapshot new_snapshot = null;
