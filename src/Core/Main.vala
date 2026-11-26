@@ -278,8 +278,17 @@ public class Main : GLib.Object{
 		// check and create lock ----------------------------
 
 		app_lock = new AppLock();
-		
-		if (!app_lock.create((app_mode == "replicate") ? "timeshift-replicate" : "timeshift", app_mode)){
+
+		bool locked = app_lock.create((app_mode == "replicate") ? "timeshift-replicate" : "timeshift", app_mode);
+
+		// a snapshot before package changes waits for a short task (e.g. a
+		// scheduled snapshot), but not for the GUI, which holds the lock while open
+		for (int i = 0; !locked && (app_mode == "package-hook") && (app_lock.lock_message.length > 0) && (i < 30); i++){
+			Thread.usleep(1000000);
+			locked = app_lock.create("timeshift", app_mode);
+		}
+
+		if (!locked){
 			if (gui_mode){
 				string msg = "";
 				if (app_lock.lock_message == "backup"){
@@ -1408,7 +1417,7 @@ public class Main : GLib.Object{
 				log_error(repo.status_details + "\n");
 				
 				// remove invalid snapshots
-				if (app_mode.length != 0){
+				if ((app_mode.length != 0) && (app_mode != "package-hook")){
 					repo.auto_remove();
 				}
 
@@ -1612,7 +1621,9 @@ public class Main : GLib.Object{
 
 			repo.load_snapshots(); // reload list for new snapshot
 			
-			if (app_mode.length != 0){
+			// snapshots before package operations are removed by the hourly
+			// maintenance task, never while the package manager waits
+			if ((app_mode.length != 0) && (app_mode != "package-hook")){
 				repo.auto_remove();
 				repo.load_snapshots();
 			}
@@ -2135,6 +2146,10 @@ public class Main : GLib.Object{
 		}
 
 		snapshot.write_boot_info(Posix.utsname().release, boot_in_snapshot);
+
+		if (app_mode == "package-hook"){
+			snapshot.write_package_comment(cmd_comments);
+		}
 		
 		// Perform any post-backup actions
 		this.run_post_backup_hooks(snapshot_path);
@@ -4970,9 +4985,9 @@ public class Main : GLib.Object{
 			
 		// start update ---------------------------
 		
-		if (scheduled){
+		if (scheduled || (btrfs_mode && (Tags.Package in schedule))){
 			
-			//hourly
+			//hourly, also removes old snapshots before package operations
 			CronTab.add_script_file("timeshift-hourly", "d", "0 * * * * root timeshift --check --scripted", stop_cron_emails);
 			
 			//boot

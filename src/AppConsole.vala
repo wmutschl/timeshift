@@ -53,7 +53,6 @@ public class AppConsole : GLib.Object {
 
 	// package manager hook mode (--package-hook)
 	private static PackageTransaction? package_transaction = null;
-	private static int package_frontend_pid = 0;
 
 	public static int main (string[] args) {
 		
@@ -82,12 +81,23 @@ public class AppConsole : GLib.Object {
 		Main.setup_env();
 
 		if ((args.length > 2) && (args[1].down() == "--package-hook")){
+
+			// never keep the package manager waiting for long
+			Posix.alarm(300);
+
 			// read the transaction first: APT waits until the hook has read its input.
 			// Messages go to stderr: the DNF5 actions plugin interprets stdout.
 			string pid_arg = (args.length > 3) ? args[3] : "";
 			package_transaction = PackageManagerHooks.read_transaction(args[2].down(), pid_arg);
-			package_frontend_pid = PackageManagerHooks.get_frontend_pid(args[2].down(), pid_arg);
 			Posix.dup2(2, 1);
+
+			string message;
+			if (PackageManagerHooks.should_skip(package_transaction, out message)){
+				if (message.length > 0){
+					stderr.printf("Timeshift: %s\n", message);
+				}
+				return 0;
+			}
 		}
 
 		LOG_ENABLE = false;
@@ -683,26 +693,37 @@ public class AppConsole : GLib.Object {
 	// called by the APT and DNF5 hooks before packages are installed, upgraded or removed
 	private void create_package_snapshot(){
 
-		if (App.live_system() || PackageManagerHooks.in_chroot()){
-			return;
-		}
-
 		if (!App.btrfs_mode || !(Tags.Package in App.schedule)){
-			log_debug("Snapshots before package operations are disabled");
 			return;
 		}
-
-		if ((package_frontend_pid > 0) && PackageManagerHooks.check_and_record_frontend(package_frontend_pid)){
-			log_msg(_("A snapshot was already created for this package operation."));
-			return;
-		}
-
-		string desc = (package_transaction != null) ? package_transaction.get_description() : "";
-
-		App.cmd_comments = (desc.length > 0) ? "Before %s".printf(desc) : "Before package operation";
-		App.cmd_tags = Tags.Package;
 
 		select_snapshot_device(false);
+
+		if (!App.repo.available()){
+			log_msg(_("No snapshot was created before this package operation") + ": " + App.repo.status_message);
+			return;
+		}
+
+		string sys_uuid = (App.sys_root == null) ? "" : App.sys_root.uuid;
+		int64 now = new DateTime.now_utc().to_unix();
+
+		foreach(var snap in App.repo.snapshots){
+
+			if (snap.live && (snap.sys_uuid == sys_uuid)){
+				log_msg(_("No snapshot was created before this package operation because a restored snapshot becomes active at the next reboot."));
+				return;
+			}
+
+			int64 age = now - snap.date.to_unix();
+			if ((Tags.Package in snap.tags) && (age >= 0) && (age < PackageManagerHooks.MIN_INTERVAL)){
+				log_msg(_("No new snapshot was created before this package operation, the last one was created less than 5 minutes ago."));
+				return;
+			}
+		}
+
+		App.cmd_comments = (package_transaction != null) ? package_transaction.get_comment() : "Before package changes";
+		App.cmd_tags = Tags.Package;
+
 		App.create_snapshot(true, null);
 	}
 	

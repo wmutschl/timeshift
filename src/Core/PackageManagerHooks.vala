@@ -22,6 +22,7 @@
 using TeeJee.Logging;
 using TeeJee.FileSystem;
 using TeeJee.ProcessHelper;
+using TeeJee.JsonHelper;
 
 /*
  * Snapshots before package manager transactions.
@@ -44,12 +45,11 @@ public class PackageManagerHooks : GLib.Object {
 	public const string DNF_ACTIONS_PLUGIN_CONF = "/etc/dnf/libdnf5-plugins/actions.conf";
 
 	private const string HOOK_MARKER = "Created by Timeshift";
-	private const string STATE_FILE = "/run/lock/timeshift/package-hook";
 
-	// another snapshot is skipped if the same process (e.g. apt running dpkg
-	// several times, or unattended-upgrades) triggers the hook again within
-	// this many seconds
-	private const int64 DEDUP_SECONDS = 300;
+	// no new snapshot if the last one was created less than this many seconds
+	// ago: APT front-ends like unattended-upgrades or the software updater run
+	// several transactions in a row for one update
+	public const int64 MIN_INTERVAL = 300;
 
 	// "apt", "dnf" or "" if neither is used on this system
 	public static string get_package_manager(){
@@ -198,74 +198,59 @@ public class PackageManagerHooks : GLib.Object {
 	}
 
 	/*
-	 * The process that started the transaction: for APT the parent of the
-	 * shell that runs the hook, for DNF5 the dnf process (pid_arg).
+	 * Checks that can be done before Timeshift is initialized, so that the
+	 * package manager is not slowed down when no snapshot will be created.
+	 * Returns true if the hook should do nothing; message explains why, or is
+	 * empty if nothing needs to be said (e.g. the option is disabled).
 	 */
-	public static int get_frontend_pid(string package_manager, string pid_arg){
+	public static bool should_skip(PackageTransaction trans, out string message){
 
-		if (package_manager == "dnf"){
-			return int.parse(pid_arg);
+		message = "";
+
+		// the option must be enabled and BTRFS mode configured
+		try{
+			var parser = new Json.Parser();
+			parser.load_from_file(CONFIG_FILE);
+			var config = parser.get_root().get_object();
+			if ((json_get_string(config, "btrfs_mode", "false") != "true")
+				|| (json_get_string(config, "schedule_package", "false") != "true")
+				|| (json_get_string(config, "do_first_run", "false") == "true")){
+				return true;
+			}
+		}
+		catch (Error e){
+			return true;
 		}
 
-		int shell_pid = (int) Posix.getppid();
-		return get_parent_pid(shell_pid);
-	}
-
-	private static int get_parent_pid(int pid){
-
-		// /proc/<pid>/stat: pid (comm) state ppid ...
-		string? stat = file_read("/proc/%d/stat".printf(pid));
-		if (stat == null){
-			return 0;
-		}
-
-		int pos = stat.last_index_of(")");
-		if (pos < 0){
-			return 0;
-		}
-
-		string[] fields = stat.substring(pos + 1).strip().split(" ");
-		return (fields.length > 1) ? int.parse(fields[1]) : 0;
-	}
-
-	private static string get_process_start_time(int pid){
-
-		string? stat = file_read("/proc/%d/stat".printf(pid));
-		if (stat == null){
-			return "";
-		}
-
-		int pos = stat.last_index_of(")");
-		if (pos < 0){
-			return "";
-		}
-
-		// field 22 (starttime); fields after ')' start with field 3 (state)
-		string[] fields = stat.substring(pos + 1).strip().split(" ");
-		return (fields.length > 19) ? fields[19] : "";
-	}
-
-	/*
-	 * Returns true if the same frontend process triggered a snapshot recently,
-	 * and records this call otherwise.
-	 */
-	public static bool check_and_record_frontend(int frontend_pid){
-
-		string id = "%d %s".printf(frontend_pid, get_process_start_time(frontend_pid));
-		int64 now = new DateTime.now_utc().to_unix();
-
-		string? txt = file_exists(STATE_FILE) ? file_read(STATE_FILE) : null;
-		if (txt != null){
-			string[] lines = txt.strip().split("\n");
-			if ((lines.length == 2) && (lines[0] == id)){
-				int64 last = int64.parse(lines[1]);
-				if ((now - last) < DEDUP_SECONDS){
-					return true;
-				}
+		foreach(string variable in new string[] { "TIMESHIFT_SKIP_SNAPSHOT", "SKIP_AUTOSNAP" }){
+			if (Environment.get_variable(variable) != null){
+				message = _("No snapshot was created before this package operation because %s is set.").printf(variable);
+				return true;
 			}
 		}
 
-		file_write(STATE_FILE, id + "\n" + now.to_string() + "\n");
+		if (in_live_session() || in_chroot() || trans.alternate_root){
+			return true;
+		}
+
+		return false;
+	}
+
+	private const string CONFIG_FILE = "/etc/timeshift/timeshift.json";
+
+	public static bool in_live_session(){
+
+		string? cmdline = file_read("/proc/cmdline");
+		if ((cmdline != null) && (cmdline.contains("boot=casper") || cmdline.contains("boot=live") || cmdline.contains("rd.live.image"))){
+			return true;
+		}
+
+		string std_out, std_err;
+		if (exec_argv_sync({ "findmnt", "-n", "-o", "FSTYPE", "/" }, out std_out, out std_err) == 0){
+			string fstype = std_out.strip();
+			return (fstype == "overlay") || (fstype == "squashfs");
+		}
+
 		return false;
 	}
 

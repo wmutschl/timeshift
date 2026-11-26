@@ -48,15 +48,16 @@ void test_apt_install(){
 	assert(trans.command_line == "apt-get install -y -q cowsay sl");
 	assert(trans.installs.size == 2);
 	assert(trans.upgrades.size == 0);
-	assert(trans.get_summary() == "install cowsay sl");
-	assert(trans.get_description() == "apt-get install cowsay sl");
+	assert(!trans.alternate_root);
+	assert(trans.get_summary() == "install cowsay, sl");
+	assert(trans.get_comment() == "Before apt-get install cowsay sl");
 }
 
 void test_apt_remove(){
 	var trans = PackageTransaction.from_apt_hook_input(APT_REMOVE);
 	assert(trans.removes.size == 1);
 	assert(trans.removes[0] == "sl");
-	assert(trans.get_description() == "apt-get remove sl");
+	assert(trans.get_comment() == "Before apt-get remove sl");
 }
 
 void test_apt_gui(){
@@ -67,22 +68,45 @@ void test_apt_gui(){
 	assert(trans.reinstalls.size == 1);
 	assert(trans.installs.size == 1);
 	assert(trans.removes.size == 1);
-	assert(trans.get_description(200) == "install new, upgrade 4 packages, downgrade old, reinstall same, remove gone");
+	assert(trans.get_summary() == "install new; upgrade baz, libbar, libfoo +1 more; downgrade old; reinstall same; remove gone");
+	assert(trans.get_comment() == "Before " + trans.get_summary());
+}
+
+void test_apt_frontends(){
+	string packagekit = "VERSION 3\nCommandLine::AsString=/usr/libexec/packagekitd\n\nvlc - - none < 3.0 amd64 none /var/cache/apt/archives/vlc.deb\n";
+	assert(PackageTransaction.from_apt_hook_input(packagekit).get_comment() == "Before PackageKit: install vlc");
+
+	string alternate = "VERSION 3\nRootDir=/target\nCommandLine::AsString=apt-get%20install%20vlc\n\n";
+	assert(PackageTransaction.from_apt_hook_input(alternate).alternate_root);
+
+	string chroot = "VERSION 3\nDPkg::Chroot-Directory=/mnt\n\n";
+	assert(PackageTransaction.from_apt_hook_input(chroot).alternate_root);
+
+	string root = "VERSION 3\nRootDir=/\nDir=/\n\n";
+	assert(!PackageTransaction.from_apt_hook_input(root).alternate_root);
 }
 
 void test_command_line(){
-	assert(PackageTransaction.from_command_line("dnf install -y vlc").get_description() == "dnf install vlc");
-	assert(PackageTransaction.from_command_line("/usr/bin/dnf5 upgrade --assumeyes").get_description() == "dnf5 upgrade");
-	// not a command line program: no description from the command line
-	assert(PackageTransaction.from_command_line("/usr/bin/python3 /usr/bin/unattended-upgrade").get_description() == "");
-	assert(PackageTransaction.from_command_line("").get_description() == "");
+	assert(PackageTransaction.from_command_line("dnf install -y vlc").get_comment() == "Before dnf install vlc");
+	assert(PackageTransaction.from_command_line("/usr/bin/dnf5 upgrade --assumeyes").get_comment() == "Before dnf5 upgrade");
+	assert(PackageTransaction.from_command_line("/usr/bin/python3 /usr/bin/unattended-upgrade").get_comment() == "Before package changes (unattended-upgrades)");
+	assert(PackageTransaction.from_command_line("/usr/libexec/dnf5daemon-server").get_comment() == "Before package changes (dnf5daemon)");
+	assert(PackageTransaction.from_command_line("").get_comment() == "Before package changes");
+}
+
+void test_sanitize(){
+	// grub-btrfs splits info.json lines on " : "; no control characters; no credentials
+	assert(PackageTransaction.from_command_line("apt install a : b").get_comment() == "Before apt install a: b");
+	assert(PackageTransaction.from_command_line("apt install a\tb").get_comment() == "Before apt install a b");
+	assert(PackageTransaction.from_command_line("dnf install https://user:secret@example.com/x.rpm").get_comment() == "Before dnf install https://***@example.com/x.rpm");
 }
 
 void test_truncate(){
-	var trans = PackageTransaction.from_command_line("apt install " + string.nfill(100, 'x'));
-	string txt = trans.get_description(20);
+	var trans = PackageTransaction.from_command_line("apt install " + string.nfill(200, 'x'));
+	string txt = trans.get_comment(20);
 	assert(txt.char_count() == 20);
 	assert(txt.has_suffix("..."));
+	assert(trans.get_comment().char_count() == 120);
 }
 
 int main(string[] args){
@@ -90,6 +114,8 @@ int main(string[] args){
 	Test.add_func("/package-transaction/apt-install", test_apt_install);
 	Test.add_func("/package-transaction/apt-remove", test_apt_remove);
 	Test.add_func("/package-transaction/apt-gui", test_apt_gui);
+	Test.add_func("/package-transaction/apt-frontends", test_apt_frontends);
+	Test.add_func("/package-transaction/sanitize", test_sanitize);
 	Test.add_func("/package-transaction/command-line", test_command_line);
 	Test.add_func("/package-transaction/truncate", test_truncate);
 	return Test.run();

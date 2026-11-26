@@ -48,6 +48,10 @@ public class Snapshot : GLib.Object{
 	public Gee.ArrayList<CryptTabEntry> cryttab_list;
 	public bool valid = true;
 	public bool live = false;
+
+	// comment written by the package manager hook; if the user changed the
+	// comment, the snapshot is kept like other snapshots with comments
+	public string package_comment = "";
 	public bool marked_for_deletion = false;
 	public LinuxDistro distro;
 	public SnapshotRepo repo;
@@ -210,6 +214,7 @@ public class Snapshot : GLib.Object{
 			app_version = json_get_string(config,"app-version","");
 			file_count = (int64) json_get_uint64(config,"file_count",file_count);
 			live = json_get_bool(config,"live",false);
+			package_comment = json_get_string(config,"package-comment","");
 			string type = config.get_string_member_with_default("type", "rsync");
 
 			//log_debug("repo.mount_path: %s".printf(repo.mount_path));
@@ -513,6 +518,35 @@ public class Snapshot : GLib.Object{
 		}
 		catch (Error e){
 			log_error(e.message);
+		}
+	}
+
+	public void write_package_comment(string comment){
+
+		package_comment = comment;
+
+		try{
+			string ctl_file = path + "/info.json";
+			var parser = new Json.Parser();
+			parser.load_from_file(ctl_file);
+			var node = parser.get_root();
+			var config = node.get_object();
+			config.set_string_member("package-comment", comment);
+			var json = new Json.Generator();
+			json.pretty = true;
+			json.indent = 2;
+			node.set_object(config);
+			json.set_root(node);
+			json.to_file(ctl_file);
+		}
+		catch (Error e){
+			log_error(e.message);
+		}
+	}
+
+	public bool package_comment_edited {
+		get {
+			return (package_comment.length > 0) && (description != package_comment);
 		}
 	}
 
