@@ -43,6 +43,7 @@ class SettingsWindow : Gtk.Window{
 	private ScheduleBox schedule_box;
 	private ExcludeBox exclude_box;
 	private UsersBox users_box;
+	private SubvolumeBox subvolume_box;
 	private MiscBox misc_box;
 	
 	private uint tmr_init;
@@ -100,14 +101,21 @@ class SettingsWindow : Gtk.Window{
 		
 		stack.add_titled (users_box, "users", _("Users"));
 
+		subvolume_box = new SubvolumeBox(this, false);
+		stack.add_titled (subvolume_box, "subvolumes", _("Subvolumes"));
+
 		stack.add_titled (exclude_box, "filters", _("Filters"));
 
 		stack.add_titled (misc_box, "misc", _("Misc"));
 
 		backend_box.type_changed.connect(()=>{
-			exclude_box.visible = !App.btrfs_mode;
 			backup_dev_box.refresh();
 			users_box.refresh();
+			subvolume_box.refresh();
+			// refresh() shows the boxes, hide them afterwards
+			exclude_box.visible = !App.btrfs_mode;
+			users_box.visible = !App.btrfs_mode;
+			subvolume_box.visible = App.btrfs_mode;
 		});
 
 		stack.set_visible_child_name("type");

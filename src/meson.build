@@ -84,6 +84,7 @@ sources_gtk = files([
   'Gtk/SetupWizardWindow.vala',
   'Gtk/SnapshotBackendBox.vala',
   'Gtk/SnapshotListBox.vala',
+  'Gtk/SubvolumeBox.vala',
   'Gtk/UsersBox.vala',
 ])
 

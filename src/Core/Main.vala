@@ -4308,7 +4308,7 @@ public class Main : GLib.Object{
 			
 			if (!supported && snapshot_to_restore.has_subvolumes()){
 				string msg = _("The target partition has an unsupported subvolume layout.") + "\n";
-				msg += _("Only ubuntu-type layouts with @ and @home subvolumes are currently supported.");
+				msg += _("The partition must contain the root subvolume (%s).").printf(root_subvolume_name);
 
 				if (app_mode == ""){
 					string title = _("Unsupported Subvolume Layout");

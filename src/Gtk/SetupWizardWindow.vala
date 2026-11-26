@@ -44,6 +44,7 @@ class SetupWizardWindow : Gtk.Window{
 	private FinishBox finish_box;
 	private ScheduleBox schedule_box;
 	private UsersBox users_box;
+	private SubvolumeBox subvolume_box;
 
 	// actions
 	private Gtk.Button btn_prev;
@@ -112,6 +113,10 @@ class SetupWizardWindow : Gtk.Window{
 		users_box = new UsersBox(this, exclude_box, false);
 		users_box.margin = 12;
 		notebook.append_page (users_box, label);
+
+		label = new Gtk.Label(_("Subvolumes"));
+		subvolume_box = new SubvolumeBox(this, false);
+		notebook.append_page (subvolume_box, label);
 
 		label = new Gtk.Label(_("Finished"));
 		finish_box = new FinishBox(this, false);
@@ -272,10 +277,11 @@ class SetupWizardWindow : Gtk.Window{
 			notebook.page = Tabs.BACKUP_DEVICE;
 			break;
 		case Tabs.USERS:
+		case Tabs.SUBVOLUMES:
 			notebook.page = Tabs.SCHEDULE;
 			break;
 		case Tabs.FINISH:
-			notebook.page = Tabs.USERS;
+			notebook.page = App.btrfs_mode ? Tabs.SUBVOLUMES : Tabs.USERS;
 			break;
 		}
 		
@@ -312,11 +318,12 @@ class SetupWizardWindow : Gtk.Window{
 			break;
 			
 		case Tabs.SCHEDULE:
-			notebook.page = Tabs.USERS;
+			notebook.page = App.btrfs_mode ? Tabs.SUBVOLUMES : Tabs.USERS;
 			schedule_accepted = true;
 			break;
 
 		case Tabs.USERS:
+		case Tabs.SUBVOLUMES:
 			notebook.page = Tabs.FINISH;
 			break;
 			
@@ -365,6 +372,7 @@ class SetupWizardWindow : Gtk.Window{
 			break;
 		case Tabs.SCHEDULE:
 		case Tabs.USERS:
+		case Tabs.SUBVOLUMES:
 			btn_prev.sensitive = true;
 			btn_next.sensitive = true;
 			btn_close.sensitive = true;
@@ -400,6 +408,9 @@ class SetupWizardWindow : Gtk.Window{
 		case Tabs.USERS:
 			users_box.refresh();
 			break;
+		case Tabs.SUBVOLUMES:
+			subvolume_box.refresh();
+			break;
 		case Tabs.FINISH:
 			finish_box.refresh();
 			break;
@@ -430,7 +441,8 @@ class SetupWizardWindow : Gtk.Window{
 		BACKUP_DEVICE = 2,
 		SCHEDULE = 3,
 		USERS = 4,
-		FINISH = 5
+		SUBVOLUMES = 5,
+		FINISH = 6
 	}
 }
 
