@@ -83,13 +83,20 @@ public class AppConsole : GLib.Object {
 		if ((args.length > 2) && (args[1].down() == "--package-hook")){
 
 			// never keep the package manager waiting for long
-			Posix.alarm(300);
+			Posix.alarm(120);
 
 			// read the transaction first: APT waits until the hook has read its input.
 			// Messages go to stderr: the DNF5 actions plugin interprets stdout.
 			string pid_arg = (args.length > 3) ? args[3] : "";
 			package_transaction = PackageManagerHooks.read_transaction(args[2].down(), pid_arg);
 			Posix.dup2(2, 1);
+
+			// nothing may wait for input from the terminal of the package manager
+			int fd = Posix.open("/dev/null", Posix.O_RDONLY);
+			if (fd >= 0){
+				Posix.dup2(fd, 0);
+				Posix.close(fd);
+			}
 
 			string message;
 			if (PackageManagerHooks.should_skip(package_transaction, out message)){
@@ -98,6 +105,9 @@ public class AppConsole : GLib.Object {
 				}
 				return 0;
 			}
+
+			// the package manager shows one line, the details are in the log file
+			LOG_QUIET = true;
 		}
 
 		LOG_ENABLE = false;
@@ -700,7 +710,7 @@ public class AppConsole : GLib.Object {
 		select_snapshot_device(false);
 
 		if (!App.repo.available()){
-			log_msg(_("No snapshot was created before this package operation") + ": " + App.repo.status_message);
+			hook_message(_("No snapshot was created before this package operation") + ": " + App.repo.status_message);
 			return;
 		}
 
@@ -710,13 +720,13 @@ public class AppConsole : GLib.Object {
 		foreach(var snap in App.repo.snapshots){
 
 			if (snap.live && (snap.sys_uuid == sys_uuid)){
-				log_msg(_("No snapshot was created before this package operation because a restored snapshot becomes active at the next reboot."));
+				hook_message(_("No snapshot was created before this package operation because a restored snapshot becomes active at the next reboot."));
 				return;
 			}
 
 			int64 age = now - snap.date.to_unix();
 			if ((Tags.Package in snap.tags) && (age >= 0) && (age < PackageManagerHooks.MIN_INTERVAL)){
-				log_msg(_("No new snapshot was created before this package operation, the last one was created less than 5 minutes ago."));
+				hook_message(_("No new snapshot was created before this package operation, the last one was created less than 5 minutes ago."));
 				return;
 			}
 		}
@@ -725,6 +735,19 @@ public class AppConsole : GLib.Object {
 		App.cmd_tags = Tags.Package;
 
 		App.create_snapshot(true, null);
+
+		if (App.last_created_snapshot != null){
+			hook_message(_("Snapshot created before this package operation") + ": %s".printf(App.last_created_snapshot.name));
+		}
+		else{
+			hook_message(_("No snapshot was created before this package operation, see the log file") + ": %s".printf(App.log_file));
+		}
+	}
+
+	// the line that the package manager shows (on stderr, see main())
+	private static void hook_message(string text){
+		stderr.printf("Timeshift: %s\n", text);
+		log_msg(text); // log file
 	}
 	
 	// restore

@@ -1012,6 +1012,16 @@ class MainWindow : Gtk.Window{
 						set_shield_subnote(_("Snapshots will be created at selected intervals"));
 					}
 				}
+				else if (App.btrfs_mode && (Tags.Package in App.schedule)){
+					// only snapshots before package operations
+					img_shield.surface = IconManager.lookup_surface(IconManager.SHIELD_MED, IconManager.SHIELD_ICON_SIZE, img_shield.scale_factor);
+					set_shield_label(_("Snapshots before package operations are enabled"));
+					set_shield_subnote("%s: %s\n%s".printf(
+						_("Latest snapshot"),
+						(last_snapshot_date == null) ? _("None") : last_snapshot_date.format(App.date_format),
+						_("Enable scheduled snapshots to protect your system")
+						));
+				}
 				else {
 					// not scheduled
 					if (App.repo.has_snapshots()){

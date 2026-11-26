@@ -31,6 +31,7 @@ namespace TeeJee.Logging{
 	public DataOutputStream dos_log;
 	public string err_log;
 	public bool LOG_ENABLE = true;
+	public bool LOG_QUIET = false; // messages only go to the log file, errors are shown
 	public bool LOG_TIMESTAMP = false;
 	public bool LOG_COLORS = true;
 	public bool LOG_DEBUG = false;
@@ -58,8 +59,10 @@ namespace TeeJee.Logging{
 
 		msg += "\n";
 
-		stdout.printf (msg);
-		stdout.flush();
+		if (!LOG_QUIET){
+			stdout.printf (msg);
+			stdout.flush();
+		}
 
 		try {
 			if (dos_log != null){

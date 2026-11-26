@@ -165,6 +165,7 @@ public class Main : GLib.Object{
 	public string cmd_target_device = "";
 	public string cmd_backup_device = "";
 	public string cmd_snapshot = "";
+	public Snapshot? last_created_snapshot = null; // by create_snapshot_for_tags()
 	public bool cmd_confirm = false;
 	public bool cmd_verbose = true;
 	public bool cmd_scripted = false;
@@ -305,7 +306,9 @@ public class Main : GLib.Object{
 			}
 			else if (app_mode == "package-hook"){
 				// the package manager must not fail because of Timeshift
-				log_msg(_("No snapshot was created before this package operation because Timeshift is already running."));
+				string msg = _("No snapshot was created before this package operation because Timeshift is already running.");
+				stderr.printf("Timeshift: %s\n", msg);
+				log_msg(msg);
 				exit(0);
 			}
 			else{
@@ -1612,6 +1615,10 @@ public class Main : GLib.Object{
 					}
 				}
 			}
+			else if (btrfs_mode && (Tags.Package in schedule)){
+				// only snapshots before package operations: the hourly task removes old ones
+				log_msg(_("Scheduled snapshots are disabled"));
+			}
 			else{
 				log_msg(_("Scheduled snapshots are disabled") + " - " + _("Nothing to do!"));
 				cron_job_update();
@@ -1735,6 +1742,7 @@ public class Main : GLib.Object{
 
 		// create new snapshot -----------------------
 		Snapshot new_snapshot = null;
+		last_created_snapshot = null;
 		if (btrfs_mode)
 		{
 			new_snapshot = create_snapshot_with_btrfs(tags, dt_created);
@@ -1785,7 +1793,13 @@ public class Main : GLib.Object{
 		}
 
 		log_msg(message);
-		OSDNotify.notify_send("TimeShift", message, 10000, "low");
+
+		last_created_snapshot = new_snapshot;
+
+		// no desktop notification for every package operation
+		if (app_mode != "package-hook"){
+			OSDNotify.notify_send("TimeShift", message, 10000, "low");
+		}
 
 		if (new_snapshot != null){
 			message = _("Tagged snapshot") + " '%s': %s".printf(new_snapshot.name, tags.as_short_list());
@@ -5066,11 +5080,16 @@ public class Main : GLib.Object{
 			save_app_config();
 		}
 
-		cron_job_update();
+		// the package manager is waiting: no maintenance in the hook
+		if (app_mode != "package-hook"){
+			cron_job_update();
+		}
 
 		unmount_target_device(false);
 
-		clean_logs();
+		if (app_mode != "package-hook"){
+			clean_logs();
+		}
 
 		app_lock.remove();
 		

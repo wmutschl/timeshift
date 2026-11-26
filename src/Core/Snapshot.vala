@@ -544,9 +544,11 @@ public class Snapshot : GLib.Object{
 		}
 	}
 
+	// a snapshot before a package operation whose comment the user changed is
+	// kept by the retention; a comment that was only cleared doesn't count
 	public bool package_comment_edited {
 		get {
-			return (package_comment.length > 0) && (description != package_comment);
+			return (package_comment.length > 0) && (description.strip().length > 0) && (description != package_comment);
 		}
 	}
 
