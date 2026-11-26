@@ -801,9 +801,9 @@ public class SnapshotRepo : GLib.Object{
 		
 		bool show_msg = true;
 
-		// delete untagged snapshots
+		// delete untagged snapshots (never those with tags of a newer version)
 		foreach(Snapshot bak in snapshots){
-			if (bak.tags == 0){
+			if ((bak.tags == 0) && (bak.unknown_tags.length == 0)){
 
 				if (show_msg){
 					log_msg("%s (%s):".printf(_("Removing snapshots"), _("un-tagged")));

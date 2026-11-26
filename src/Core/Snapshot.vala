@@ -140,16 +140,28 @@ public class Snapshot : GLib.Object{
 	
 	// manage tags
 	
+	// tags written by a newer version, e.g. "quarterly": they are kept and
+	// written back, so that the snapshot is not removed as untagged and the
+	// newer version still finds them
+	public string unknown_tags = "";
+
 	public string taglist{
 		owned get{
-			return this.tags.as_config_string();
+			return (this.tags.as_config_string() + " " + unknown_tags).strip();
 		}
 		set{
 			this.tags = 0;
+			unknown_tags = "";
 			foreach(string tag in value.split(" ")){
+				if (tag.length == 0){
+					continue;
+				}
 				Tags? parsed = Tags.parse(tag);
-				if (parsed != null){
+				if ((parsed != null) && (parsed.name() == tag.down())){
 					this.tags |= parsed;
+				}
+				else{
+					unknown_tags = (unknown_tags + " " + tag).strip();
 				}
 			}
 		}
