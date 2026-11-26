@@ -4,7 +4,7 @@ Timeshift for Linux is an application that provides functionality similar to the
 
 In RSYNC mode, snapshots are taken using [rsync](https://rsync.samba.org) and [hard-links](https://en.wikipedia.org/wiki/Hard_link). Common files are shared between snapshots which saves disk space. Each snapshot is a full system backup that can be browsed with a file manager.
 
-In BTRFS mode, snapshots are taken using the in-built features of the BTRFS filesystem. BTRFS snapshots are supported only on BTRFS systems having an Ubuntu-type subvolume layout (with @ and @home subvolumes).
+In BTRFS mode, snapshots are taken using the in-built features of the BTRFS filesystem. BTRFS snapshots are supported on BTRFS systems whose root filesystem is mounted from a subvolume (e.g. @ on Ubuntu and Linux Mint, root on Fedora). The home subvolume and other subvolumes can be included in snapshots.
 
 Timeshift is similar to applications like [rsnapshot](https://www.rsnapshot.org), [BackInTime](https://github.com/bit-team/backintime) and [TimeVault](https://wiki.ubuntu.com/TimeVault) but with different goals. It is designed to protect only system files and settings. User files such as documents, pictures and music are excluded. This ensures that your files remain unchanged when you restore your system to an earlier date. If you need a tool to back up your documents and files please take a look at the excellent [BackInTime](https://github.com/bit-team/backintime) application which is more configurable and provides options for saving user files.  
 
@@ -110,22 +110,12 @@ Incomplete snapshots don't show up in the restore list and are deleted when the 
 
 - **BTRFS** - OS installed on BTRFS volumes (with or without LUKS)
 
-  - Only Ubuntu-type layouts with **@** and **@home** subvolumes are supported
-  - **@** and **@home** subvolumes may be on same or different BTRFS volumes
-  - **@** may be on BTRFS volume and **/home** may be mounted on non-BTRFS partition
-  - If swap files are used they should not be located in **@** or **@home** and could instead be stored in their own subvolume, eg **@swap**
+  - The root filesystem must be mounted from a subvolume, e.g. **@** (Ubuntu, Linux Mint) or **root** (Fedora). The subvolumes are detected from the mount points, their names don't matter
+  - The home subvolume and other subvolumes on the same BTRFS volume that are mounted from `/etc/fstab` (e.g. `/boot`, `/var` or `/var/log`) can be included in snapshots, and each of them can be selected for restore
+  - The home subvolume may also be on a different BTRFS volume, and **/home** may be mounted on a non-BTRFS partition
+  - If swap files are used they should not be located in a subvolume that is included in snapshots and could instead be stored in their own subvolume, eg **@swap**. Subvolumes with an active swap file are skipped
   - Separate partitions (e.g. `/boot`) can be handled via custom created hooks (placed in `/etc/timeshift/backup-hooks.d/` and `/etc/timeshift/restore-hooks.d/`). Script naming must match `run-parts` [requirements](https://manpages.ubuntu.com/manpages/noble/man8/run-parts.8.html). Current snapshot path is exported as `TS_SNAPSHOT_PATH`.
-  - Other layouts are not supported
-  - Make sure, that you have selected subvolume *@* or */@* for root. You can check that executing script below, and if output is *OK*, then everything is alright.
-
-    ```shell
-    grep -E '^[^#].+/\s+btrfs' /etc/fstab | \
-    grep -oE 'subvol=[^,]+' | \
-    cut -d= -f2 | \
-    grep -qE '^/?@$' && \
-    echo 'OK' || \
-    echo 'Not OK'
-    ```
+  - Layouts that run the system from the top-level subvolume (e.g. the default of the Ubuntu 24.04 desktop installer) or from nested subvolumes (e.g. openSUSE) are not supported
 
   - Default BTRFS subvolume must be /. You can make it using script below.
 
@@ -210,9 +200,9 @@ Remember to delete all snapshots before un-installing. Otherwise the snapshots c
 ## Known Issues & Limitations
 
 #### BTRFS volumes
-BTRFS volumes must have an Ubuntu-type layout with **@** and **@home** subvolumes. Other layouts are not supported. Systems having the **@** subvolume and having **/home** on a non-BTRFS partition are also supported.
+The root filesystem must be mounted from a subvolume (e.g. **@** or **root**). Systems that run from the top-level subvolume of the BTRFS volume are not supported. Systems having the root subvolume and having **/home** on a non-BTRFS partition are also supported.
 
-`Text file busy / btrfs returned an error: 256 / Failed to create snapshot` can occur if you have a Linux swapfile mounted within the **@** or **@home** subvolumes which prevents snapshot from succeeding. Relocate the swapfile out of **@** or **@home*, for example into it's own subvolume like **@swap**.
+`Text file busy / btrfs returned an error: 256 / Failed to create snapshot` can occur if you have a Linux swapfile mounted within a subvolume that is included in snapshots, which prevents snapshot from succeeding. Relocate the swapfile into its own subvolume, for example **@swap**.
 
 #### Disk Space
 
