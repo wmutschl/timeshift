@@ -132,7 +132,7 @@ public class Subvolume : GLib.Object{
 			}
 		}
 		
-		string cmd = "";
+		string[] cmd;
 		string std_out, std_err, subpath;
 		int ret_val;
 
@@ -140,22 +140,15 @@ public class Subvolume : GLib.Object{
 
 		log_msg("%s: %s (Id:%ld)".printf(_("Deleting subvolume"), name, id));
 
-		// always remove subvolumes recursively, this does not affect performance
-		string options = App.use_option_raw ? "--commit-after" : "";
-
-        if (Main.btrfs_version__can_recursive_delete) {
-            options += " --recursive";
-        }
-
 		subpath = path_combine(path, name);
 		if (dir_exists(subpath)) { // possible nested subvolume present, verify before deleting
-			int rc_show = exec_sync("btrfs subvolume show '%s'".printf(subpath), out std_out, out std_err);
+			int rc_show = exec_argv_sync({ "btrfs", "subvolume", "show", subpath }, out std_out, out std_err);
 			if (rc_show == 0) {
 				// confirmed nested btrfs subvolume, delete it first
-				cmd = "btrfs subvolume delete %s '%s'".printf(options, subpath);
+				cmd = get_delete_command(subpath);
 				log_debug("Deleting nested subvolume in snapshot");
-				log_debug(cmd);
-				ret_val = exec_sync(cmd, out std_out, out std_err);
+				log_debug(argv_to_string(cmd));
+				ret_val = exec_argv_sync(cmd, out std_out, out std_err);
 				if (ret_val != 0){
 					log_error(std_err);
 					log_error(_("Failed to delete snapshot nested subvolume") + ": '%s'".printf(subpath));
@@ -167,9 +160,9 @@ public class Subvolume : GLib.Object{
 			}
 		}
 		
-		cmd = "btrfs subvolume delete %s '%s'".printf(options, path);
-		log_debug(cmd);
-		ret_val = exec_sync(cmd, out std_out, out std_err);
+		cmd = get_delete_command(path);
+		log_debug(argv_to_string(cmd));
+		ret_val = exec_argv_sync(cmd, out std_out, out std_err);
 		if (ret_val != 0){
 			log_error(std_err);
 			log_error(_("Failed to delete snapshot subvolume") + ": '%s'".printf(path));
@@ -182,13 +175,13 @@ public class Subvolume : GLib.Object{
 			if ((id > 0) && (repo != null)){
 
 				log_debug("Waiting on btrfs to finish deleting...");
-				while (exec_sync("btrfs subvolume sync %s".printf(mount_path), out std_out, out std_err) != 0) {
+				while (exec_argv_sync({ "btrfs", "subvolume", "sync", mount_path }, out std_out, out std_err) != 0) {
 					log_debug("Still waiting for btrfs to finish deleting... %s".printf(std_err));
 					sleep(1000);
 				}
 
                 log_debug("Rescanning quotas...");
-                while (exec_sync("btrfs quota rescan %s".printf(mount_path), out std_out, out std_err) != 0) {
+                while (exec_argv_sync({ "btrfs", "quota", "rescan", mount_path }, out std_out, out std_err) != 0) {
                     log_debug("Still rescanning quotas... %s".printf(std_err));
                     sleep(1000);
                 }
@@ -196,9 +189,9 @@ public class Subvolume : GLib.Object{
 				// Check if qgroup still exists before trying to destroy it.
 				// The qgroup may have been auto-destroyed when the subvolume was deleted.
 				string qgroup_id = "0/%ld".printf(id);
-				cmd = "btrfs qgroup show -f '%s'".printf(repo.mount_paths[name]);
-				log_debug(cmd);
-				ret_val = exec_sync(cmd, out std_out, out std_err);
+				cmd = { "btrfs", "qgroup", "show", "-f", repo.mount_paths[name] };
+				log_debug(argv_to_string(cmd));
+				ret_val = exec_argv_sync(cmd, out std_out, out std_err);
 
 				bool qgroup_exists = (ret_val == 0) && (std_out.contains(qgroup_id));
 
@@ -207,9 +200,9 @@ public class Subvolume : GLib.Object{
 				} else {
 					log_msg("%s: %s".printf(_("Destroying qgroup"), qgroup_id));
 
-					cmd = "btrfs qgroup destroy %s '%s'".printf(qgroup_id, repo.mount_paths[name]);
-					log_debug(cmd);
-					ret_val = exec_sync(cmd, out std_out, out std_err);
+					cmd = { "btrfs", "qgroup", "destroy", qgroup_id, repo.mount_paths[name] };
+					log_debug(argv_to_string(cmd));
+					ret_val = exec_argv_sync(cmd, out std_out, out std_err);
 					if (ret_val != 0){
 						// Qgroup may have been destroyed between our check and destroy attempt
 						log_debug("Qgroup %s could not be destroyed (likely already removed): %s".printf(qgroup_id, std_err));
@@ -219,13 +212,13 @@ public class Subvolume : GLib.Object{
 				}
 
                 log_debug("Rescanning quotas (post)...");
-                while (exec_sync("btrfs quota rescan %s".printf(mount_path), out std_out, out std_err) != 0) {
+                while (exec_argv_sync({ "btrfs", "quota", "rescan", mount_path }, out std_out, out std_err) != 0) {
                     log_debug("Still rescanning quotas (post)... %s".printf(std_err));
                     sleep(1000);
                 }
 
                 log_debug("Final sync (post)...");
-                while (exec_sync("btrfs subvolume sync %s".printf(mount_path), out std_out, out std_err) != 0) {
+                while (exec_argv_sync({ "btrfs", "subvolume", "sync", mount_path }, out std_out, out std_err) != 0) {
                     log_debug("Still syncing (post)... %s".printf(std_err));
                     sleep(1000);
                 }
@@ -234,6 +227,24 @@ public class Subvolume : GLib.Object{
 		}
 
 		return true;
+	}
+
+	private string[] get_delete_command(string subvol_path){
+
+		string[] cmd = { "btrfs", "subvolume", "delete" };
+
+		if (App.use_option_raw){
+			cmd += "--commit-after";
+		}
+
+		// always remove subvolumes recursively, this does not affect performance
+		if (Main.btrfs_version__can_recursive_delete){
+			cmd += "--recursive";
+		}
+
+		cmd += subvol_path;
+
+		return cmd;
 	}
 
 	public bool restore(){
@@ -255,11 +266,11 @@ public class Subvolume : GLib.Object{
 			return false;
 		}
 		
-		string cmd = "btrfs subvolume snapshot '%s' '%s'".printf(src_path, dst_path);
-		log_debug(cmd);
+		string[] cmd = { "btrfs", "subvolume", "snapshot", src_path, dst_path };
+		log_debug(argv_to_string(cmd));
 
 		string std_out, std_err;
-		int status = exec_sync(cmd, out std_out, out std_err);
+		int status = exec_argv_sync(cmd, out std_out, out std_err);
 		
 		if (status != 0){
 			log_error(std_err);

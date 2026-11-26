@@ -80,7 +80,47 @@ namespace TeeJee.ProcessHelper{
 	        return -1;
 	    }
 	}
-	
+
+	public int exec_argv_sync (string[] argv, out string? std_out = null, out string? std_err = null, string[]? envp = null){
+
+		/* Executes single command synchronously without parsing a command line.
+		 * The arguments are passed to the process as they are, so paths and names
+		 * do not need any quoting or escaping. Use this whenever an argument is not
+		 * a constant, e.g. for subvolume names and paths provided by the user.
+		 * std_out, std_err can be null. Output will be written to terminal if null.
+		 * envp can be null to inherit the environment of the current process. */
+
+		try {
+			int status;
+			Process.spawn_sync(null, argv, envp, SpawnFlags.SEARCH_PATH, null, out std_out, out std_err, out status);
+			return status;
+		}
+		catch (Error e){
+			log_error (e.message);
+			return -1;
+		}
+	}
+
+	public string argv_to_string (string[] argv){
+
+		/* Returns a printable command line for argv, for logging only.
+		 * Arguments that contain special characters are quoted. */
+
+		string txt = "";
+		foreach(string arg in argv){
+			if (txt.length > 0){
+				txt += " ";
+			}
+			if ((arg.length > 0) && Regex.match_simple("^[A-Za-z0-9_@%+=:,./-]+$", arg)){
+				txt += arg;
+			}
+			else{
+				txt += Shell.quote(arg);
+			}
+		}
+		return txt;
+	}
+
 	public int exec_script_sync (string script,
 		out string? std_out = null, out string? std_err = null,
 		bool supress_errors = false, bool run_as_admin = false, 

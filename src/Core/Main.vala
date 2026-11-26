@@ -1836,13 +1836,13 @@ public class Main : GLib.Object{
 				dst_path = dst_path.replace(nested_home_subvol, @"/$(home_subvolume_name)");
 			}
 			
-			string cmd = "btrfs subvolume snapshot '%s' '%s' \n".printf(src_path, dst_path);
+			string[] cmd = { "btrfs", "subvolume", "snapshot", src_path, dst_path };
 			
-			if (LOG_COMMANDS) { log_debug(cmd); }
+			if (LOG_COMMANDS) { log_debug(argv_to_string(cmd)); }
 
 			string std_out, std_err;
 			
-			int ret_val = exec_sync(cmd, out std_out, out std_err);
+			int ret_val = exec_argv_sync(cmd, out std_out, out std_err);
 			
 			if (ret_val != 0){
 				
@@ -1883,9 +1883,8 @@ public class Main : GLib.Object{
 		if(fileType == FileType.DIRECTORY) {
 			log_debug("Running post-backup tasks...");
 
-			string sh = "export TS_SNAPSHOT_PATH=\"" + snapshot_path + "\" &&" +
-				" run-parts --verbose \"%s\"".printf(backuphooksdir);
-			exec_script_sync(sh, null, null, false, false, false, true);
+			string[] envp = Environ.set_variable(Environ.get(), "TS_SNAPSHOT_PATH", snapshot_path, true);
+			exec_argv_sync({ "run-parts", "--verbose", backuphooksdir }, null, null, envp);
 
 			log_debug("Finished running post-backup tasks...");
 		} else {
@@ -3216,11 +3215,11 @@ public class Main : GLib.Object{
 		// Perform any post-restore actions
 		log_debug("Running post-restore tasks...");
 
-		string sh = "test -d \"/etc/timeshift/restore-hooks.d\" &&" +
-		" export TS_SNAPSHOT_PATH=\"" + snapshot_to_restore.path + "\" &&" + 
-		" run-parts --verbose /etc/timeshift/restore-hooks.d";
-
-		exec_script_sync(sh, null, null, false, false, false, true);
+		const string restorehooksdir = "/etc/timeshift/restore-hooks.d";
+		if (dir_exists(restorehooksdir)){
+			string[] envp = Environ.set_variable(Environ.get(), "TS_SNAPSHOT_PATH", snapshot_to_restore.path, true);
+			exec_argv_sync({ "run-parts", "--verbose", restorehooksdir }, null, null, envp);
+		}
 
 		log_debug("Finished running post-restore tasks...");
 		
@@ -3238,7 +3237,6 @@ public class Main : GLib.Object{
 
 		log_debug("Main: create_pre_restore_snapshot_btrfs()");
 		
-		string cmd, std_out, std_err;
 		DateTime dt_created = new DateTime.now_local();
 		string time_stamp = dt_created.format("%Y-%m-%d_%H-%M-%S");
 		string snapshot_name = time_stamp;
@@ -3322,13 +3320,11 @@ public class Main : GLib.Object{
 				no_subvolumes_found = false;
 
 				string dst_path = path_combine(snapshot_path, subvol_name);
-				cmd = "mv '%s' '%s'".printf(src_path, dst_path);
-				log_debug(cmd);
-				
-				int status = exec_sync(cmd, out std_out, out std_err);
-				
-				if (status != 0){
-					log_error (std_err);
+				log_debug("rename: %s -> %s".printf(src_path, dst_path));
+
+				// a subvolume can be moved within its filesystem with a plain rename
+				if (FileUtils.rename(src_path, dst_path) != 0){
+					log_error(strerror(errno));
 					log_error(_("Failed to move system subvolume to snapshot directory") + ": %s".printf(subvol_name));
 					return false;
 				}
@@ -4242,14 +4238,13 @@ public class Main : GLib.Object{
 		// Check validity of arguments, querying empty string is an error.
 		if (subvol_name == "") return false;
 		
-		string cmd = "";
 		string std_out;
 		string std_err;
 		int ret_val;
 
-		cmd = "btrfs subvolume list '%s'".printf(repo.mount_paths[subvol_name]);
-		log_debug(cmd);
-		ret_val = exec_sync(cmd, out std_out, out std_err);
+		string[] cmd = { "btrfs", "subvolume", "list", repo.mount_paths[subvol_name] };
+		log_debug(argv_to_string(cmd));
+		ret_val = exec_argv_sync(cmd, out std_out, out std_err);
 		if (ret_val != 0){
 			log_error (std_err);
 			log_error(_("btrfs returned an error") + ": %d".printf(ret_val));
@@ -4331,25 +4326,28 @@ public class Main : GLib.Object{
 		// Check validity of arguments, querying empty string is an error.
 		if (subvol_name == "") return false;
 
-		string cmd = "";
 		string std_out;
 		string std_err;
 		int ret_val;
 
-		string options = use_option_raw ? "--raw" : "";
-
-		cmd = "btrfs qgroup show %s '%s'".printf(options, repo.mount_paths[subvol_name]);
-		log_debug(cmd);
-		ret_val = exec_sync(cmd, out std_out, out std_err);
+		string[] cmd;
+		if (use_option_raw){
+			cmd = { "btrfs", "qgroup", "show", "--raw", repo.mount_paths[subvol_name] };
+		}
+		else{
+			cmd = { "btrfs", "qgroup", "show", repo.mount_paths[subvol_name] };
+		}
+		log_debug(argv_to_string(cmd));
+		ret_val = exec_argv_sync(cmd, out std_out, out std_err);
 
 		if (ret_val != 0){
 			if (use_option_raw){
 				use_option_raw = false;
 
 				// try again without --raw option
-				cmd = "btrfs qgroup show '%s'".printf(repo.mount_paths[subvol_name]);
-				log_debug(cmd);
-				ret_val = exec_sync(cmd, out std_out, out std_err);
+				cmd = { "btrfs", "qgroup", "show", repo.mount_paths[subvol_name] };
+				log_debug(argv_to_string(cmd));
+				ret_val = exec_argv_sync(cmd, out std_out, out std_err);
 			}
 
 			if (ret_val != 0){
