@@ -236,6 +236,8 @@ depending on your package management system.
 
 Remember to delete all snapshots before un-installing. Otherwise the snapshots continue to occupy space on your system.  To delete all snapshots, run the application, select all snapshots from the list (CTRL+A) and click the _Delete_ button on the toolbar. This will delete all snapshots and remove the _/timeshift_ folder in the root directory.     
 
+In BTRFS mode, also uncheck *Packages* in *Settings* > *Schedule* and remove the targets in *Settings* > *Replication* before un-installing. Timeshift then removes the hook of the package manager (`/etc/apt/apt.conf.d/80timeshift` or `/etc/dnf/libdnf5-plugins/actions.d/timeshift.actions`) and `/etc/cron.d/timeshift-replicate`. The Debian package removes them as well.
+
 ## Known Issues & Limitations
 
 #### BTRFS volumes

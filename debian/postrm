@@ -1,0 +1,23 @@
+#!/bin/sh
+set -e
+
+# Timeshift writes these files at runtime when snapshots before package
+# operations or scheduled replication are enabled (see
+# PackageManagerHooks.update() and Main.cron_job_update()). Remove them with
+# the package, otherwise APT and cron keep calling the removed binary.
+case "$1" in
+	remove|purge)
+		f=/etc/apt/apt.conf.d/80timeshift
+		if [ -f "$f" ] && grep -q "Created by Timeshift" "$f"; then
+			rm -f "$f"
+		fi
+		f=/etc/cron.d/timeshift-replicate
+		if [ -f "$f" ] && grep -q "timeshift --replicate" "$f"; then
+			rm -f "$f"
+		fi
+		;;
+esac
+
+#DEBHELPER#
+
+exit 0
