@@ -5061,18 +5061,40 @@ public class Main : GLib.Object{
 				}
 			}
 			
-			if (dir_exists(mdir)){
+			// remove the empty mount point directories that are left, e.g.
+			// restore/home after restoring a snapshot
 
-				string cmd3 = "rmdir '%s'".printf(escape_single_quote(mdir));
-				int retval3 = exec_sync(cmd3);
-				
-				if (retval3 != 0){
-					log_error("Failed to remove directory");
-					log_msg("Ret=%d".printf(retval3));
-					//ignore
-				}
+			remove_empty_dirs(mdir);
+
+			if (dir_exists(mdir)){
+				log_debug("Could not remove directory: %s".printf(mdir));
 			}
 		}
+	}
+
+	private void remove_empty_dirs(string path){
+
+		/* Removes empty directories below path (bottom-up) and path itself.
+		 * Never descends into a mounted filesystem. */
+
+		Posix.Stat st_path;
+		if (Posix.stat(path, out st_path) != 0){ return; }
+
+		foreach(var name in dir_list_names(path)){
+
+			string child = path_combine(path, name);
+
+			if (FileUtils.test(child, FileTest.IS_SYMLINK) || !FileUtils.test(child, FileTest.IS_DIR)){ continue; }
+
+			Posix.Stat st;
+			if (Posix.stat(child, out st) != 0){ continue; }
+
+			if (st.st_dev != st_path.st_dev){ continue; } // something is mounted here
+
+			remove_empty_dirs(child);
+		}
+
+		dir_empty_delete(path);
 	}
 }
 
