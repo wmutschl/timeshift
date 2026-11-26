@@ -43,6 +43,7 @@ Nowadays Timeshift is part of the Xapp project which is a collection of cross-DE
     - M: Monthly
     - B: Boot
     - O: On-demand (Manually created)
+    - P: Packages (created before packages are installed, upgraded or removed, BTRFS only)
 
 ![](images/settings_schedule.png)
 
@@ -57,6 +58,44 @@ It is strongly recommended to use BTRFS snapshots on systems that are installed 
   ![](images/settings_rsync.png)
 
   ![](images/settings_btrfs.png)
+
+### Snapshots Before Package Operations (BTRFS)
+
+* Select the level *Packages* in *Settings* > *Schedule* to create a snapshot before APT or DNF installs, upgrades or removes packages: from the terminal, the software updater or a software center (PackageKit, GNOME Software).
+
+* The comment describes the operation, e.g. `Before apt install vlc` or `Before PackageKit: upgrade firefox, thunderbird +3 more`. The package manager shows one line, e.g. `Timeshift: Snapshot created before this package operation: 2026-11-26_20-24-02`.
+
+* At most one snapshot is created every 5 minutes, so that a large upgrade or unattended-upgrades (which run dpkg several times) create one snapshot.
+
+* The oldest snapshots are removed by the hourly task when there are more than the number to keep. A snapshot whose comment you changed is kept.
+
+* To skip the snapshot for one operation: `sudo TIMESHIFT_SKIP_SNAPSHOT=1 apt install ...`
+
+* The package manager never fails because of Timeshift. If no snapshot can be created, e.g. while the Timeshift window is open, the reason is printed and the operation continues. No snapshots are created in live sessions and in a chroot.
+
+* APT: the hook is `/etc/apt/apt.conf.d/80timeshift`. DNF5 (Fedora 41 and later): the hook is `/etc/dnf/libdnf5-plugins/actions.d/timeshift.actions` and needs the package `libdnf5-plugin-actions`. Timeshift creates and removes these files when the option is changed.
+
+* If *timeshift-autosnap-apt* is installed, remove it, otherwise two snapshots are created for each operation.
+
+### Copies on Other Disks (BTRFS Replication)
+
+* *Settings* > *Replication* sends copies of the snapshots to another BTRFS filesystem: a disk connected to this computer (e.g. a USB disk) or a directory on another computer (SSH). The copies are made with `btrfs send` and `btrfs receive`. After the first copy only the differences are sent.
+
+* Each target keeps its own number of snapshots per level, e.g. 12 monthly, 4 weekly, 7 daily and 10 on-demand snapshots. Levels set to 0 are not sent. Older copies are removed from the target, the newest copy is always kept.
+
+* Scheduled targets receive new snapshots every hour (`/etc/cron.d/timeshift-replicate`). A disk that is not connected or a computer that can't be reached is skipped, and nothing is mounted or connected when there are no new snapshots. *Send Now* sends to the selected target right away.
+
+* The copies are stored like on the snapshot device: `<directory>/<hostname>_<uuid>/timeshift-btrfs/snapshots/<snapshot>/` with one read-only subvolume per snapshotted subvolume and the snapshot's `info.json`. They can be browsed to recover files.
+
+* For incremental transfers Timeshift keeps a read-only snapshot of the newest copy of each target in `timeshift-btrfs/send-cache/` on the snapshot device. Removing a target removes its cache.
+
+* Encrypted disks must be unlocked first, e.g. by the desktop when the disk is connected.
+
+* SSH targets: Timeshift uses its own key, `/etc/timeshift/ssh/id_ed25519`, which is created by the target dialog. Add the public key to `~/.ssh/authorized_keys` of the user on the remote computer. The directory must be on a BTRFS filesystem. The commands on the remote computer must run as root: use the root account, or a user that may run `btrfs`, `mkdir`, `mv`, `rm`, `rmdir` and `tee` with sudo without a password (option *Use sudo on the remote computer*). Note that these commands give the user full access to the remote computer. The host key is accepted at the first connection (*Test Connection* shows its fingerprint). The filesystem of the directory is recorded at the first connection as well, nothing is sent if the directory is on another filesystem later, e.g. when the backup disk of the remote computer is not mounted.
+
+* Command line: `timeshift --replicate` sends to all scheduled targets, `--replication-target <name>` to one target, `--dry-run` shows what would be sent and removed, `--list-targets` lists the targets with the result of their last run.
+
+* The targets are stored in `/etc/timeshift/replication.json`.
 
 ### User Data is Excluded by Default
 Timeshift is designed to protect system files and settings. It is NOT a backup tool and is not meant to protect user data. Entire contents of users' home directories are excluded by default. This has two advantages:
@@ -203,6 +242,10 @@ Remember to delete all snapshots before un-installing. Otherwise the snapshots c
 The root filesystem must be mounted from a subvolume (e.g. **@** or **root**). Systems that run from the top-level subvolume of the BTRFS volume are not supported. Systems having the root subvolume and having **/home** on a non-BTRFS partition are also supported.
 
 `Text file busy / btrfs returned an error: 256 / Failed to create snapshot` can occur if you have a Linux swapfile mounted within a subvolume that is included in snapshots, which prevents snapshot from succeeding. Relocate the swapfile into its own subvolume, for example **@swap**.
+
+#### grub-btrfs
+
+*grub-btrfs* also lists the read-only snapshots that Timeshift keeps for replication. To hide them, add `"timeshift-btrfs/send-cache"` to `GRUB_BTRFS_IGNORE_PREFIX_PATH` in `/etc/default/grub-btrfs/config`.
 
 #### Disk Space
 
