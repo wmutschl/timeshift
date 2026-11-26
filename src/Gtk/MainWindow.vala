@@ -772,13 +772,6 @@ class MainWindow : Gtk.Window{
 
 
 	private void restore(){
-
-		ui_sensitive(false);
-
-		if (App.btrfs_mode && (App.check_btrfs_layout_system(this) == false)){
-			ui_sensitive(true);
-			return;
-		}
 		
 		TreeIter iter;
 		TreeSelection sel;
@@ -833,6 +826,8 @@ class MainWindow : Gtk.Window{
 		else{
 			App.snapshot_to_restore = null;
 		}
+
+		ui_sensitive(false);
 
 		App.init_mount_list();
 		

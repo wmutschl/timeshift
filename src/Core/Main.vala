@@ -54,6 +54,10 @@ public class Main : GLib.Object{
 	public bool include_btrfs_home_for_restore = false;
     public static bool btrfs_version__can_recursive_delete = false;
 
+	// names of the subvolumes mounted at / and /home, detected from the running
+	// system by update_partitions(); the defaults are used if the system is not
+	// running from a subvolume (e.g. live session), home is empty if /home is
+	// not a separate subvolume
 	public string root_subvolume_name = "@";
 	public string home_subvolume_name = "@home";
 	
@@ -296,23 +300,6 @@ public class Main : GLib.Object{
 		this.app_conf_path_default = GLib.Path.build_path (GLib.Path.DIR_SEPARATOR_S, Constants.SYSCONFDIR, "timeshift", "default.json");
 		//sys_root and sys_home will be initialized by update_partition_list()
 
-		// Detect subvolume names based on distro id.
-		// Only has effect when timeshift is opened the first time,
-		// otherwise the setting is overwritten by loading the config.
-		if (this.current_distro.dist_id.down() == "fedora") {
-			this.root_subvolume_name = "root";
-			this.home_subvolume_name = "home";
-		}
-		else if (this.current_distro.dist_id.down() == "debian") {
-			this.root_subvolume_name = "@rootfs";
-			this.home_subvolume_name = "";
-			this.include_btrfs_home_for_backup = false;
-		}
-		else { //if (this.current_distro.dist_id.down() == "ubuntu")
-			this.root_subvolume_name = "@";
-			this.home_subvolume_name = "@home";
-		}
-		
 		// check if running locally ------------------------
 
 		string local_exec = args[0];
@@ -508,48 +495,57 @@ public class Main : GLib.Object{
 	}
 
 	/*
-	 * Checks if root_subvolume_name and home_subvolume_name are configured to valid values.
+	 * Checks if the running system can be snapshotted in BTRFS mode, i.e. if
+	 * the root filesystem is mounted from a subvolume.
 	 *
-	 * @return False if the config is invalid.
+	 * @return False if the system layout is not supported.
 	 */
 	public bool check_btrfs_system_config(out string title, out string msg) {
 
 		log_debug("check_btrfs_system_config()");
 
-		// If the root subvolume is configured to an empty string, the config is invalid.
-		if(root_subvolume_name == "") {
-			title = _("Root subvolume configuration is invalid");
-			msg = _("Root subvolume name is empty, make sure to select a valid subvolume layout.");
+		title = "";
+		msg = "";
+
+		if (!sys_subvolumes.has_key(root_subvolume_name)
+			|| (sys_subvolumes[root_subvolume_name].path != "/")){
+
+			title = _("The system partition has an unsupported subvolume layout.");
+			msg = _("The root filesystem must be mounted from a BTRFS subvolume.");
 			return false;
 		}
 
-		// If the home subvolume is configured to an empty string and home backup is
-		// enabbled, the config is invalid.
-		if (include_btrfs_home_for_backup && home_subvolume_name == "") {
-			title = _("Home subvolume configuration is invalid");
-			msg = _("Home backups are enabled home subvolume name is empty, make sure to select a valid subvolume layout.");
+		if (!is_valid_subvolume_name(root_subvolume_name)){
+			title = _("The system partition has an unsupported subvolume layout.");
+			msg = _("Subvolume names with special characters are not supported") + ": %s".printf(root_subvolume_name);
 			return false;
 		}
 
-		// If sys_subvolumes does not contain a subvolume for root_subvolume_name,
-		// the config is invalid.
-		if (!sys_subvolumes.has_key(root_subvolume_name)) {
-			title = _("Root subvolume configuration is invalid");
-			msg = _("The configured root subvolume does not exist") + " (" + root_subvolume_name + ").";
-			return false;
-		}
-		
-		// If home backups are enbaled and sys_subvolumes does not contain a subvolume
-		// for home_subvolume_name, the config is invalid.
-		if (include_btrfs_home_for_backup && !sys_subvolumes.has_key(home_subvolume_name)) {
-			title = _("Home subvolume configuration is invalid");
-			msg = _("Home backups are enabled and the configured home subvolume does not exist") + " (" + home_subvolume_name + ").";
+		if (include_btrfs_home_for_backup && (home_subvolume_name.length > 0)
+			&& !is_valid_subvolume_name(home_subvolume_name)){
+
+			title = _("The system partition has an unsupported subvolume layout.");
+			msg = _("Subvolume names with special characters are not supported") + ": %s".printf(home_subvolume_name);
 			return false;
 		}
 
 		return true;
 	}
-	
+
+	/*
+	 * Returns true if the subvolume name can be used by Timeshift: a single,
+	 * top-level subvolume without characters that have a special meaning in
+	 * paths or mount options.
+	 */
+	public static bool is_valid_subvolume_name(string name){
+
+		if ((name.length == 0) || (name == ".") || (name == "..")){
+			return false;
+		}
+
+		return Regex.match_simple("^[A-Za-z0-9@._+-]+$", name);
+	}
+
 	/*
 	 * Calls check_btrfs_system_config and displays an error message to the user
 	 *
@@ -2333,10 +2329,6 @@ public class Main : GLib.Object{
 	public bool restore_snapshot(Gtk.Window? parent_win){
 
 		log_debug("Main: restore_snapshot()");
-		
-		if (btrfs_mode && (check_btrfs_layout_system() == false)){
-			return false;
-		}
 
 		parent_window = parent_win;
 
@@ -3392,9 +3384,6 @@ public class Main : GLib.Object{
 			config.set_string_member("parent_device_uuid", backup_parent_uuid);
 		}
 
-		config.set_string_member("root_subvolume_name", root_subvolume_name);
-		config.set_string_member("home_subvolume_name", home_subvolume_name);
-
 		config.set_string_member("do_first_run", false.to_string());
 		config.set_string_member("btrfs_mode", btrfs_mode.to_string());
 		config.set_string_member("include_btrfs_home_for_backup", include_btrfs_home_for_backup.to_string());
@@ -3521,9 +3510,6 @@ public class Main : GLib.Object{
 			btrfs_mode = cmd_btrfs_mode; //override
 		}
 
-		root_subvolume_name = json_get_string(config,"root_subvolume_name", root_subvolume_name);
-		home_subvolume_name = json_get_string(config,"home_subvolume_name", home_subvolume_name);
-		
 		backup_uuid = json_get_string(config,"backup_device_uuid", backup_uuid);
 		backup_parent_uuid = json_get_string(config,"parent_device_uuid", backup_parent_uuid);
 
@@ -3778,6 +3764,10 @@ public class Main : GLib.Object{
 		sys_efi = null;
 		sys_home = null;
 
+		// subvolumes mounted at / and /home, as reported by the kernel
+		Subvolume? root_mount = null;
+		Subvolume? home_mount = null;
+
 		foreach(var pi in partitions){
 			
 			foreach(var mp in pi.mount_points){
@@ -3789,6 +3779,9 @@ public class Main : GLib.Object{
 
 				if (mp.mount_point == "/"){
 					sys_root = pi;
+					if ((pi.fstype == "btrfs") && (mp.subvolume_name().length > 0)){
+						root_mount = new Subvolume(mp.subvolume_name(), "/", pi.uuid, null);
+					}
 					if ((app_mode == "")||(LOG_DEBUG)){
 						string txt = _("/ is mapped to device") + ": %s, UUID=%s".printf(pi.device,pi.uuid);
 						if (mp.subvolume_name().length > 0){
@@ -3800,6 +3793,9 @@ public class Main : GLib.Object{
 
 				if (mp.mount_point == "/home"){
 					sys_home = pi;
+					if ((pi.fstype == "btrfs") && (mp.subvolume_name().length > 0)){
+						home_mount = new Subvolume(mp.subvolume_name(), "/home", pi.uuid, null);
+					}
 					if ((app_mode == "")||(LOG_DEBUG)){
 						string txt = _("/home is mapped to device") + ": %s, UUID=%s".printf(pi.device,pi.uuid);
 						if (mp.subvolume_name().length > 0){
@@ -3835,6 +3831,54 @@ public class Main : GLib.Object{
 		}
 
 		sys_subvolumes = Subvolume.detect_subvolumes_for_system_by_path("/", null, parent_window);
+
+		detect_system_subvolume_names(root_mount, home_mount);
+	}
+
+	private void detect_system_subvolume_names(Subvolume? root_mount, Subvolume? home_mount){
+
+		/* Finds the subvolumes mounted at / and /home, e.g. '@' and '@home'
+		 * on Ubuntu or 'root' and 'home' on Fedora. The mounted subvolumes take
+		 * precedence over /etc/fstab, which may refer to the device by LABEL=
+		 * or PARTUUID= or may not mention the subvolume at all. If the system is
+		 * not running from a subvolume, the classic names are kept. */
+
+		string root_name = "";
+		string home_name = "";
+
+		foreach(var subvol in sys_subvolumes.values){
+			if (subvol.path == "/"){
+				root_name = subvol.name;
+			}
+			else if (subvol.path == "/home"){
+				home_name = subvol.name;
+			}
+		}
+
+		if (root_mount != null){
+			root_name = root_mount.name;
+			if (!sys_subvolumes.has_key(root_name)){
+				sys_subvolumes[root_name] = root_mount;
+			}
+		}
+
+		if ((home_mount != null) && (home_mount.name != root_name)){
+			home_name = home_mount.name;
+			if (!sys_subvolumes.has_key(home_name)){
+				sys_subvolumes[home_name] = home_mount;
+			}
+		}
+		else if (home_name == root_name){
+			home_name = "";
+		}
+
+		if (root_name.length > 0){
+			root_subvolume_name = root_name;
+			home_subvolume_name = home_name;
+		}
+
+		log_debug("BTRFS root subvolume: '%s', home subvolume: '%s'".printf(
+			root_subvolume_name, home_subvolume_name));
 	}
 
 	public bool mount_target_devices(Gtk.Window? parent_win = null){
