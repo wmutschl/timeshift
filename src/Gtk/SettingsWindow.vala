@@ -44,6 +44,7 @@ class SettingsWindow : Gtk.Window{
 	private ExcludeBox exclude_box;
 	private UsersBox users_box;
 	private SubvolumeBox subvolume_box;
+	private ReplicationBox replication_box;
 	private MiscBox misc_box;
 	
 	private uint tmr_init;
@@ -106,6 +107,9 @@ class SettingsWindow : Gtk.Window{
 
 		stack.add_titled (exclude_box, "filters", _("Filters"));
 
+		replication_box = new ReplicationBox(this);
+		stack.add_titled (replication_box, "replication", _("Replication"));
+
 		stack.add_titled (misc_box, "misc", _("Misc"));
 
 		backend_box.type_changed.connect(()=>{
@@ -117,6 +121,7 @@ class SettingsWindow : Gtk.Window{
 			exclude_box.visible = !App.btrfs_mode;
 			users_box.visible = !App.btrfs_mode;
 			subvolume_box.visible = App.btrfs_mode;
+			replication_box.visible = App.btrfs_mode;
 		});
 
 		stack.set_visible_child_name("type");

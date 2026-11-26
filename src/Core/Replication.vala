@@ -765,6 +765,10 @@ public class Replication : GLib.Object {
 		}
 	}
 
+	public bool was_cancelled {
+		get { return cancelled; }
+	}
+
 	private string cache_dir {
 		owned get {
 			return path_combine(App.repo.mount_path, "timeshift-btrfs/send-cache/" + target.id);
@@ -832,7 +836,8 @@ public class Replication : GLib.Object {
 			log_error(error_message);
 		}
 
-		if (!dry_run){
+		// a cancelled run keeps the result of the last run
+		if (!dry_run && !cancelled){
 			var status = new ReplicationStatus();
 			status.time = new DateTime.now_utc().to_unix();
 			status.ok = ok;
