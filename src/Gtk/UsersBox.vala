@@ -38,9 +38,7 @@ class UsersBox : Gtk.Box{
 	private Gtk.ScrolledWindow scrolled_treeview;
 	private Gtk.Window parent_window;
 	private ExcludeBox exclude_box;
-	private Gtk.Box box_btrfs;
 	private Gtk.Label lbl_message;
-	private Gtk.CheckButton chk_include_btrfs_home;
 	private bool restore_mode = false;
 	
 	public UsersBox (Gtk.Window _parent_window, ExcludeBox _exclude_box, bool _restore_mode) {
@@ -67,11 +65,6 @@ class UsersBox : Gtk.Box{
 		lbl_message = label;
 
 		init_treeview();
-
-		box_btrfs = new Gtk.Box(Gtk.Orientation.VERTICAL, 6);
-		add(box_btrfs);
-
-		init_btrfs_home_option(box_btrfs);
 		
 		refresh();
 
@@ -318,67 +311,13 @@ class UsersBox : Gtk.Box{
 		treeview.append_column(col);
 	}
 
-	private void init_btrfs_home_option(Gtk.Box box){
-
-		if (restore_mode){
-			
-			chk_include_btrfs_home = new Gtk.CheckButton.with_label(_("Restore home subvolume"));
-
-			box.add(chk_include_btrfs_home);
-
-			chk_include_btrfs_home.toggled.connect(()=>{
-				App.include_btrfs_home_for_restore = chk_include_btrfs_home.active; 
-			});
-		
-		}
-		else {
-
-			chk_include_btrfs_home = new Gtk.CheckButton.with_label(_("Include home subvolume in backups"));
-			
-			box.add(chk_include_btrfs_home);
-
-			chk_include_btrfs_home.toggled.connect(()=>{
-				App.include_btrfs_home_for_backup = chk_include_btrfs_home.active; 
-			});
-		}
-	}
-
 	// helpers
 
 	public void refresh(){
 
-		if (App.btrfs_mode){
+		// in BTRFS mode, subvolumes are selected on the Subvolumes page instead
 
-			lbl_message.hide();
-			lbl_message.set_no_show_all(true);
-
-			scrolled_treeview.hide();
-			scrolled_treeview.set_no_show_all(true);
-
-			box_btrfs.set_no_show_all(false);
-			box_btrfs.show_all();
-
-			chk_include_btrfs_home.sensitive = (App.home_subvolume_name != "");
-			
-			if (restore_mode){
-				chk_include_btrfs_home.active = App.include_btrfs_home_for_restore;
-			}
-			else{
-				chk_include_btrfs_home.active = App.include_btrfs_home_for_backup;
-			}
-		}
-		else{
-			lbl_message.show();
-			lbl_message.set_no_show_all(false);
-
-			scrolled_treeview.show();
-			scrolled_treeview.set_no_show_all(false);
-
-			refresh_treeview();
-			
-			box_btrfs.hide();
-			box_btrfs.set_no_show_all(true);
-		}
+		refresh_treeview();
 
 		show_all();
 	}
