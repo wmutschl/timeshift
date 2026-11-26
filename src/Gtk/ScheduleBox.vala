@@ -298,6 +298,9 @@ class ScheduleBox : Gtk.Box{
 		if (!App.btrfs_mode){
 			msg = _("Only available in BTRFS mode");
 		}
+		else if ((pm == "apt") && file_exists("/etc/apt/apt.conf.d/80-timeshift-autosnap-apt")){
+			msg = _("timeshift-autosnap-apt is installed as well, remove it to avoid two snapshots for each package operation.");
+		}
 		else if (pm == "apt"){
 			msg = _("Snapshots are created when APT is used, e.g. by apt, the software updater or the software manager. The comment shows the package operation.");
 		}
