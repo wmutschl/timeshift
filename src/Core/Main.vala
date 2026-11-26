@@ -42,6 +42,7 @@ public class Main : GLib.Object{
 	public string share_folder = "";
 	public string rsnapshot_conf_path = "";
 	public string app_conf_path = "";
+	public string replication_conf_path = "";
 	public string app_conf_path_old = "";
 	public string app_conf_path_default = "";
 	public bool first_run = false;
@@ -165,7 +166,9 @@ public class Main : GLib.Object{
 	public string cmd_target_device = "";
 	public string cmd_backup_device = "";
 	public string cmd_snapshot = "";
+	public string cmd_replication_target = "";
 	public Snapshot? last_created_snapshot = null; // by create_snapshot_for_tags()
+	public bool cmd_dry_run = false;
 	public bool cmd_confirm = false;
 	public bool cmd_verbose = true;
 	public bool cmd_scripted = false;
@@ -3831,11 +3834,6 @@ public class Main : GLib.Object{
 		}
 		config.set_array_member("include_btrfs_subvolumes_for_restore", arr_subvols);
 
-		var arr_targets = new Json.Array();
-		foreach(var target in replication_targets){
-			arr_targets.add_object_element(target.to_json());
-		}
-		config.set_array_member("replication_targets", arr_targets);
 		config.set_string_member("stop_cron_emails", stop_cron_emails.to_string());
 
 		config.set_string_member("schedule_monthly",  (Tags.Monthly in App.schedule).to_string());
@@ -3892,6 +3890,7 @@ public class Main : GLib.Object{
 
 		try{
 			json.to_file(this.app_conf_path);
+			ReplicationTarget.save_all(replication_targets, replication_conf_path);
 		} catch (Error e) {
 	        log_error (e.message);
 	    }
@@ -3904,6 +3903,8 @@ public class Main : GLib.Object{
 	public void load_app_config(){
 
 		log_debug("Main: load_app_config()");
+
+		replication_conf_path = path_combine(file_parent(app_conf_path), "replication.json");
 
 		// check if first run -----------------------
 		
@@ -3958,14 +3959,9 @@ public class Main : GLib.Object{
 		read_mount_point_list(config, "include_btrfs_subvolumes_for_backup", include_btrfs_subvolumes_for_backup);
 		read_mount_point_list(config, "include_btrfs_subvolumes_for_restore", include_btrfs_subvolumes_for_restore);
 
-		replication_targets.clear();
-		if (config.has_member("replication_targets")){
-			foreach (Json.Node jnode in config.get_array_member("replication_targets").get_elements()){
-				if (jnode.get_node_type() == Json.NodeType.OBJECT){
-					replication_targets.add(ReplicationTarget.from_json(jnode.get_object()));
-				}
-			}
-		}
+		// in a separate file, see Replication.vala
+		replication_targets = ReplicationTarget.load_all(replication_conf_path);
+
 		stop_cron_emails = json_get_bool(config, "stop_cron_emails", stop_cron_emails);
 
 		if (cmd_btrfs_mode != null){

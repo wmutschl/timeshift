@@ -49,7 +49,7 @@ public class BtrfsSendTask : GLib.Object {
 	 * receive_argv: the receiving command, e.g. { "btrfs", "receive", "/mnt/target/dir" }
 	 * Returns true if both commands succeeded.
 	 */
-	public bool run(string source, string parent, string[] receive_argv, bool compressed_data = false){
+	public bool run(string source, string parent, string[] receive_argv, bool io_nice = false, bool compressed_data = false){
 
 		string[] send_argv = { "btrfs", "send" };
 		if (compressed_data){
@@ -64,8 +64,8 @@ public class BtrfsSendTask : GLib.Object {
 		log_debug(argv_to_string(send_argv) + " | " + argv_to_string(receive_argv));
 
 		try{
-			sender = new Subprocess.newv(send_argv, SubprocessFlags.STDOUT_PIPE | SubprocessFlags.STDERR_PIPE);
-			receiver = new Subprocess.newv(receive_argv, SubprocessFlags.STDIN_PIPE | SubprocessFlags.STDERR_PIPE | SubprocessFlags.STDOUT_SILENCE);
+			sender = new_launcher(SubprocessFlags.STDOUT_PIPE | SubprocessFlags.STDERR_PIPE, io_nice).spawnv(send_argv);
+			receiver = new_launcher(SubprocessFlags.STDIN_PIPE | SubprocessFlags.STDERR_PIPE | SubprocessFlags.STDOUT_SILENCE, io_nice).spawnv(receive_argv);
 		}
 		catch (Error e){
 			error_message = e.message;
@@ -121,6 +121,18 @@ public class BtrfsSendTask : GLib.Object {
 
 	public void cancel(){
 		cancellable.cancel();
+	}
+
+	private static SubprocessLauncher new_launcher(SubprocessFlags flags, bool io_nice){
+		var launcher = new SubprocessLauncher(flags);
+		if (io_nice){
+			// background runs must not slow down the system
+			launcher.set_child_setup(() => {
+				ioprio_set(0, IoPrio.prioValue(IoPrio.PrioClass.IDLE, 0));
+				Posix.setpriority(Posix.PRIO_PROCESS, 0, 10);
+			});
+		}
+		return launcher;
 	}
 
 	private bool copy_stream(InputStream input, OutputStream output){

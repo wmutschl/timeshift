@@ -29,10 +29,22 @@ using TeeJee.Misc;
  * Replication: copies of BTRFS snapshots on another BTRFS filesystem, on a
  * local disk or on another computer (SSH), made with btrfs send/receive.
  *
- * Layout on the target:
- *   <path>/<hostname>/snapshots/<snapshot>/<subvolume>   (read-only, received)
- *   <path>/<hostname>/snapshots/<snapshot>/info.json     (copy of the snapshot's info.json)
- *   <path>/<hostname>/snapshots/<snapshot>/replica.json  (written last: the copy is complete)
+ * Layout on the target, the same as on the snapshot device, so that copies can
+ * be browsed and restored like snapshots:
+ *   <path>/<hostname>_<uuid>/timeshift-btrfs/snapshots/<snapshot>/<subvolume>  (read-only, received)
+ *   <path>/<hostname>_<uuid>/timeshift-btrfs/snapshots/<snapshot>/info.json
+ * <uuid> is the beginning of the UUID of the system's root filesystem, so that
+ * computers with the same host name can share a target.
+ *
+ * A snapshot is received into snapshots/.partial-<snapshot>/, which gets the
+ * info.json last and is then renamed to snapshots/<snapshot>/. A copy is
+ * therefore complete if its directory has its final name and an info.json.
+ * Left-over .partial- directories are removed. When a copy is removed, only
+ * subvolumes that were received (read-only, with a received UUID) are deleted,
+ * anything else in the directory is left alone.
+ *
+ * The targets are stored in replication.json next to timeshift.json, which
+ * older versions rewrite without the keys they don't know.
  *
  * btrfs send needs read-only subvolumes, but Timeshift snapshots are
  * writable. Each snapshot is sent from a read-only snapshot of it that is
@@ -57,6 +69,7 @@ public class ReplicationTarget : GLib.Object {
 	public string user = "root";
 	public string identity_file = "";    // ssh private key, default: Timeshift's key
 	public bool use_sudo = false;        // ssh: run btrfs with sudo on the remote host
+	public string fs_uuid = "";          // ssh: filesystem of the directory, recorded at the first connection
 
 	// local: directory relative to the top level of the filesystem
 	// ssh: absolute directory on a BTRFS filesystem of the remote host
@@ -142,6 +155,7 @@ public class ReplicationTarget : GLib.Object {
 		obj.set_string_member("user", user);
 		obj.set_string_member("identity_file", identity_file);
 		obj.set_string_member("use_sudo", use_sudo.to_string());
+		obj.set_string_member("fs_uuid", fs_uuid);
 		obj.set_string_member("path", path);
 		foreach(string level in ReplicationPolicy.LEVELS){
 			obj.set_string_member("keep_" + level, policy.get_keep(level).to_string());
@@ -162,6 +176,7 @@ public class ReplicationTarget : GLib.Object {
 		target.user = json_get_string(obj, "user", "root");
 		target.identity_file = json_get_string(obj, "identity_file", "");
 		target.use_sudo = json_get_bool(obj, "use_sudo", false);
+		target.fs_uuid = json_get_string(obj, "fs_uuid", "");
 		target.path = json_get_string(obj, "path", target.path);
 		foreach(string level in ReplicationPolicy.LEVELS){
 			target.policy.set_keep(level, json_get_int(obj, "keep_" + level, target.policy.get_keep(level)));
@@ -171,6 +186,136 @@ public class ReplicationTarget : GLib.Object {
 
 	public ReplicationTarget copy(){
 		return from_json(to_json());
+	}
+
+	public void copy_from(ReplicationTarget other){
+		var obj = other.to_json();
+		var tmp = from_json(obj);
+		id = tmp.id;
+		name = tmp.name;
+		enabled = tmp.enabled;
+		kind = tmp.kind;
+		device_uuid = tmp.device_uuid;
+		host = tmp.host;
+		port = tmp.port;
+		user = tmp.user;
+		identity_file = tmp.identity_file;
+		use_sudo = tmp.use_sudo;
+		fs_uuid = tmp.fs_uuid;
+		path = tmp.path;
+		policy = tmp.policy;
+	}
+
+	// creates Timeshift's SSH key if it does not exist
+	public static bool create_ssh_key(out string error){
+
+		error = "";
+
+		if (file_exists(SSH_KEY)){
+			return true;
+		}
+
+		string dir = file_parent(SSH_KEY);
+		dir_create(dir);
+		Posix.chmod(dir, 0700);
+
+		string host = Environment.get_host_name();
+		string std_out, std_err;
+		if (exec_argv_sync({ "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "timeshift@" + host, "-f", SSH_KEY }, out std_out, out std_err) != 0){
+			error = std_err.strip();
+			return false;
+		}
+
+		return true;
+	}
+
+	// fingerprint of the host key that was accepted at the first connection
+	public string get_host_key_fingerprint(){
+
+		string name = (port == 22) ? host : "[%s]:%d".printf(host, port);
+
+		string std_out, std_err;
+		if (exec_argv_sync({ "ssh-keygen", "-l", "-F", name, "-f", SSH_KNOWN_HOSTS }, out std_out, out std_err) != 0){
+			return "";
+		}
+
+		// "# Host <name> found: line 1" followed by "<name> <type> <fingerprint>"
+		foreach(string line in std_out.split("\n")){
+			string[] parts = line.strip().split(" ");
+			if (!line.has_prefix("#") && (parts.length >= 3)){
+				return "%s %s".printf(parts[1], parts[2]);
+			}
+		}
+
+		return "";
+	}
+
+	// reads the targets from a file like /etc/timeshift/replication.json
+	public static Gee.ArrayList<ReplicationTarget> load_all(string file_path){
+
+		var list = new Gee.ArrayList<ReplicationTarget>();
+
+		if (!file_exists(file_path)){
+			return list;
+		}
+
+		try{
+			var parser = new Json.Parser();
+			parser.load_from_file(file_path);
+			var config = parser.get_root().get_object();
+			if (config.has_member("targets")){
+				foreach (Json.Node jnode in config.get_array_member("targets").get_elements()){
+					if (jnode.get_node_type() == Json.NodeType.OBJECT){
+						list.add(from_json(jnode.get_object()));
+					}
+				}
+			}
+		}
+		catch (Error e){
+			log_error(_("Failed to read file") + ": %s: %s".printf(file_path, e.message));
+		}
+
+		return list;
+	}
+
+	public static void save_all(Gee.ArrayList<ReplicationTarget> list, string file_path){
+
+		if ((list.size == 0) && !file_exists(file_path)){
+			return;
+		}
+
+		var arr = new Json.Array();
+		foreach(var target in list){
+			arr.add_object_element(target.to_json());
+		}
+
+		var config = new Json.Object();
+		config.set_array_member("targets", arr);
+
+		var node = new Json.Node(Json.NodeType.OBJECT);
+		node.set_object(config);
+		var json = new Json.Generator();
+		json.pretty = true;
+		json.indent = 2;
+		json.set_root(node);
+
+		try{
+			dir_create(file_parent(file_path));
+			json.to_file(file_path);
+			Posix.chmod(file_path, 0600); // contains host and user names
+		}
+		catch (Error e){
+			log_error(_("Failed to write file") + ": %s: %s".printf(file_path, e.message));
+		}
+	}
+
+	public static ReplicationTarget? find(Gee.ArrayList<ReplicationTarget> list, string name_or_id){
+		foreach(var target in list){
+			if ((target.id == name_or_id) || (target.name == name_or_id)){
+				return target;
+			}
+		}
+		return null;
 	}
 }
 
@@ -183,7 +328,8 @@ public abstract class ReplicationConnection : GLib.Object {
 	// absolute directory on the target that holds the copies of this computer
 	public string root = "";
 
-	public abstract bool open();
+	// create_dirs: create the directory for the copies if it does not exist
+	public abstract bool open(bool create_dirs = true);
 	public abstract void close();
 
 	public abstract bool mkdir(string path);
@@ -195,15 +341,24 @@ public abstract class ReplicationConnection : GLib.Object {
 	public abstract BtrfsSubvolumeInfo? subvolume_info(string path);
 	public abstract bool delete_subvolume(string path);
 	public abstract bool remove_empty_dir(string path);
+	public abstract bool rename(string from, string to);
 	public abstract string[] receive_command(string dir);
 
+	// set by open() if it recorded the filesystem of the target (target.fs_uuid)
+	public bool target_changed = false;
+
 	public string snapshots_dir {
-		owned get { return path_combine(root, "snapshots"); }
+		owned get { return path_combine(root, "timeshift-btrfs/snapshots"); }
 	}
 
-	public static string hostname(){
+	// directory of this computer on the target: <hostname>_<root filesystem UUID prefix>
+	public static string system_dir_name(){
 		string name = Environment.get_host_name();
-		return Regex.match_simple("^[A-Za-z0-9._-]+$", name) ? name : "localhost";
+		if (!Regex.match_simple("^[A-Za-z0-9._-]+$", name)){
+			name = "localhost";
+		}
+		string uuid = ((App.sys_root != null) && (App.sys_root.uuid.length >= 8)) ? App.sys_root.uuid.substring(0, 8) : "";
+		return (uuid.length > 0) ? "%s_%s".printf(name, uuid) : name;
 	}
 }
 
@@ -216,7 +371,7 @@ public class LocalReplicationConnection : ReplicationConnection {
 		this.target = target;
 	}
 
-	public override bool open(){
+	public override bool open(bool create_dirs = true){
 
 		var dev = Device.get_device_by_uuid(target.device_uuid);
 
@@ -251,9 +406,9 @@ public class LocalReplicationConnection : ReplicationConnection {
 			return false;
 		}
 
-		root = path_combine(path_combine(mount_point, target.path), hostname());
+		root = path_combine(path_combine(mount_point, target.path), system_dir_name());
 
-		if (!mkdir(path_combine(root, "snapshots"))){
+		if (create_dirs && !mkdir(snapshots_dir)){
 			close();
 			return false;
 		}
@@ -299,7 +454,14 @@ public class LocalReplicationConnection : ReplicationConnection {
 	}
 
 	public override bool write_file(string path, string text){
-		return file_write(path, text);
+		try{
+			// replaces the file atomically
+			return FileUtils.set_contents(path, text);
+		}
+		catch (Error e){
+			error_message = e.message;
+			return false;
+		}
 	}
 
 	public override bool remove_file(string path){
@@ -323,6 +485,14 @@ public class LocalReplicationConnection : ReplicationConnection {
 		return dir_empty_delete(path);
 	}
 
+	public override bool rename(string from, string to){
+		if (FileUtils.rename(from, to) != 0){
+			error_message = "%s: %s".printf(to, strerror(errno));
+			return false;
+		}
+		return true;
+	}
+
 	public override string[] receive_command(string dir){
 		return { "btrfs", "receive", dir };
 	}
@@ -331,6 +501,10 @@ public class LocalReplicationConnection : ReplicationConnection {
 public class SshReplicationConnection : ReplicationConnection {
 
 	private ReplicationTarget target;
+
+	// set by open() if the directory is on another filesystem than recorded
+	public bool fs_mismatch = false;
+	public string found_fs_uuid = "";
 
 	public SshReplicationConnection(ReplicationTarget target){
 		this.target = target;
@@ -370,29 +544,76 @@ public class SshReplicationConnection : ReplicationConnection {
 		return exec_argv_sync(argv, out std_out, out std_err);
 	}
 
-	public override bool open(){
+	public override bool open(bool create_dirs = true){
 
 		dir_create(file_parent(ReplicationTarget.SSH_KNOWN_HOSTS));
 
 		string std_out, std_err;
+		string fstype = "";
+		string uuid = "";
 
-		// the directory must be on BTRFS
-		if (run({ "stat", "-f", "-c", "%T", target.path }, false, out std_out, out std_err) != 0){
+		// the filesystem of the directory: it must be BTRFS, and the same as at the
+		// first connection, so that nothing is received on the root filesystem of
+		// the remote computer when its backup disk is not mounted
+		int status = run({ "findmnt", "-n", "-o", "FSTYPE,UUID", "-T", target.path }, false, out std_out, out std_err);
+
+		if (status == 255){
 			error_message = (std_err.strip().length > 0) ? std_err.strip() : _("Could not connect to %s").printf(target.host);
 			return false;
 		}
+		else if (status == 0){
+			string[] fields = Regex.split_simple("\\s+", std_out.strip());
+			fstype = fields[0];
+			uuid = (fields.length > 1) ? fields[fields.length - 1] : "";
+		}
+		else{
+			// findmnt is not available
+			if (run({ "stat", "-f", "-c", "%T", target.path }, false, out std_out, out std_err) != 0){
+				error_message = (std_err.strip().length > 0) ? std_err.strip() : _("Could not connect to %s").printf(target.host);
+				return false;
+			}
+			fstype = std_out.strip();
+		}
 
-		if (std_out.strip() != "btrfs"){
+		if (fstype != "btrfs"){
 			error_message = _("The directory on the remote host is not on a BTRFS filesystem") + ": %s".printf(target.path);
 			return false;
 		}
 
-		root = path_combine(target.path, hostname());
+		found_fs_uuid = uuid;
 
-		return mkdir(path_combine(root, "snapshots"));
+		if (uuid.length > 0){
+			if (target.fs_uuid.length == 0){
+				target.fs_uuid = uuid;
+				target_changed = true;
+			}
+			else if (target.fs_uuid != uuid){
+				fs_mismatch = true;
+				error_message = _("The directory on the remote host is on another filesystem than before. Is the right disk mounted? If the disk was replaced, edit the target and test the connection.") + " (%s)".printf(target.path);
+				return false;
+			}
+		}
+
+		root = path_combine(target.path, system_dir_name());
+
+		return !create_dirs || mkdir(snapshots_dir);
 	}
 
 	public override void close(){
+	}
+
+	// ssh errors of a computer that is offline or in another network
+	public static bool is_unreachable(string ssh_error){
+		string[] patterns = {
+			"Could not resolve hostname", "Name or service not known", "Temporary failure in name resolution",
+			"Connection timed out", "No route to host", "Network is unreachable", "Connection refused"
+		};
+		foreach(string pattern in patterns){
+			if (ssh_error.contains(pattern)){
+				return true;
+			}
+		}
+		return false;
 	}
 
 	public override bool mkdir(string path){
@@ -431,6 +652,20 @@ public class SshReplicationConnection : ReplicationConnection {
 	}
 
 	public override bool write_file(string path, string text){
+		// write to a temporary file and rename it, so that the file is replaced atomically
+		string tmp = path + ".tmp";
+		if (!write_file_direct(tmp, text)){
+			return false;
+		}
+		string std_out, std_err;
+		if (run({ "mv", "-f", tmp, path }, true, out std_out, out std_err) != 0){
+			error_message = std_err.strip();
+			return false;
+		}
+		return true;
+	}
+
+	private bool write_file_direct(string path, string text){
 		try{
 			string[] argv = ssh_command({ "tee", path }, true);
 			var proc = new Subprocess.newv(argv, SubprocessFlags.STDIN_PIPE | SubprocessFlags.STDOUT_SILENCE | SubprocessFlags.STDERR_PIPE);
@@ -477,6 +712,15 @@ public class SshReplicationConnection : ReplicationConnection {
 		return run({ "rmdir", path }, true, out std_out, out std_err) == 0;
 	}
 
+	public override bool rename(string from, string to){
+		string std_out, std_err;
+		if (run({ "mv", from, to }, true, out std_out, out std_err) != 0){
+			error_message = std_err.strip();
+			return false;
+		}
+		return true;
+	}
+
 	public override string[] receive_command(string dir){
 		return ssh_command({ "btrfs", "receive", dir }, true);
 	}
@@ -488,6 +732,14 @@ public class Replication : GLib.Object {
 
 	public ReplicationTarget target;
 	public bool dry_run = false;
+	public bool io_nice = false;   // low IO priority, for scheduled runs
+
+	// scheduled runs: a disk that is not connected or a computer that cannot
+	// be reached is skipped without an error
+	public bool skip_unavailable = false;
+
+	// the target was changed and must be saved (see ReplicationConnection.target_changed)
+	public bool target_changed = false;
 
 	// progress, read by the GUI
 	public string status_line = "";
@@ -499,6 +751,8 @@ public class Replication : GLib.Object {
 	private ReplicationConnection? conn = null;
 	private BtrfsSendTask? task = null;
 	private bool cancelled = false;
+	private int64 bytes_done = 0;    // by the finished transfers
+	private string newest_copy = ""; // newest snapshot on the target
 
 	public Replication(ReplicationTarget target){
 		this.target = target;
@@ -542,17 +796,34 @@ public class Replication : GLib.Object {
 			return false;
 		}
 
-		conn = target.is_ssh ? (ReplicationConnection) new SshReplicationConnection(target) : new LocalReplicationConnection(target);
-
-		if (!conn.open()){
-			error_message = conn.error_message;
-			log_error(error_message);
-			return false;
+		if (skip_unavailable && !target.is_ssh && (Device.get_device_by_uuid(target.device_uuid) == null)){
+			log_msg(_("The device is not connected, skipped"));
+			return true;
 		}
 
-		bool ok = replicate();
+		// scheduled runs don't connect (spin up the disk) if nothing is new
+		if (skip_unavailable && !has_new_snapshots()){
+			log_msg(_("No new snapshots since the last run"));
+			return true;
+		}
 
-		conn.close();
+		conn = target.is_ssh ? (ReplicationConnection) new SshReplicationConnection(target) : new LocalReplicationConnection(target);
+
+		bool ok = conn.open(!dry_run);
+		target_changed = conn.target_changed;
+
+		if (!ok && skip_unavailable && target.is_ssh && SshReplicationConnection.is_unreachable(conn.error_message)){
+			log_msg(_("The computer cannot be reached, skipped") + ": %s".printf(conn.error_message));
+			return true;
+		}
+
+		if (ok){
+			ok = replicate();
+			conn.close();
+		}
+		else{
+			error_message = conn.error_message;
+		}
 
 		if (ok){
 			set_status(_("Replication completed") + ": %d %s".printf(snapshots_sent, _("snapshots sent")));
@@ -561,32 +832,51 @@ public class Replication : GLib.Object {
 			log_error(error_message);
 		}
 
+		if (!dry_run){
+			var status = new ReplicationStatus();
+			status.time = new DateTime.now_utc().to_unix();
+			status.ok = ok;
+			status.message = ok ? "" : error_message;
+			status.sent = snapshots_sent;
+			status.newest = newest_copy;
+			if ((status.newest.length == 0) && !ok){
+				status.newest = ReplicationStatus.load(target).newest; // not known after an error
+			}
+			status.save(target);
+		}
+
 		return ok;
 	}
 
 	private bool replicate(){
 
 		// copies on the target; incomplete ones (interrupted transfers) are removed
-		var replicas = new Gee.HashMap<string, Json.Object>(); // name -> replica.json
-		var replica_info = new Gee.HashMap<string, Json.Object>(); // name -> info.json
+		var replicas = new Gee.HashMap<string, Json.Object>(); // name -> info.json
 
 		foreach(string name in conn.list_dirs(conn.snapshots_dir)){
+
+			if (name.has_prefix(".partial-")){
+				if (!dry_run){
+					remove_partial(path_combine(conn.snapshots_dir, name));
+				}
+				continue;
+			}
 
 			if (!Regex.match_simple("^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}$", name)){
 				continue; // not ours
 			}
 
 			string dir = path_combine(conn.snapshots_dir, name);
-			var marker = parse_json(conn.read_file(path_combine(dir, "replica.json")));
 			var info = parse_json(conn.read_file(path_combine(dir, "info.json")));
 
-			if ((marker == null) || (info == null)){
-				remove_incomplete_replica(dir);
+			if (info == null){
+				if (!dry_run){
+					remove_incomplete_replica(dir);
+				}
 				continue;
 			}
 
-			replicas[name] = marker;
-			replica_info[name] = info;
+			replicas[name] = info;
 		}
 
 		// what should be sent and removed
@@ -604,7 +894,7 @@ public class Replication : GLib.Object {
 
 		foreach(string name in replicas.keys){
 			if (!sources.has_key(name)){
-				var info = replica_info[name];
+				var info = replicas[name];
 				int64 created = int64.parse(json_get_string(info, "created", "0"));
 				items.add(new ReplicationItem(name, created, json_get_string(info, "tags", ""), false, true));
 			}
@@ -646,8 +936,8 @@ public class Replication : GLib.Object {
 		// get more tags later, e.g. a daily snapshot becomes a weekly one)
 		if (!dry_run){
 			foreach(string name in replicas.keys){
-				if (sources.has_key(name) && (replica_info.has_key(name))){
-					if (json_get_string(replica_info[name], "tags", "") != sources[name].taglist){
+				if (sources.has_key(name)){
+					if (json_get_string(replicas[name], "tags", "") != sources[name].taglist){
 						copy_info_json(sources[name], path_combine(conn.snapshots_dir, name));
 					}
 				}
@@ -668,6 +958,8 @@ public class Replication : GLib.Object {
 			clean_cache(items);
 		}
 
+		newest_copy = get_newest_copy(items);
+
 		return true;
 	}
 
@@ -681,18 +973,18 @@ public class Replication : GLib.Object {
 		set_status(_("Sending snapshot") + " %s (%d/%d)".printf(snap.name, snapshots_sent + 1, snapshots_to_send));
 
 		string target_dir = path_combine(conn.snapshots_dir, snap.name);
+		string partial_dir = path_combine(conn.snapshots_dir, ".partial-" + snap.name);
 
-		if (!conn.mkdir(target_dir)){
+		if (conn.exists(partial_dir)){
+			remove_partial(partial_dir);
+		}
+
+		if (!conn.mkdir(partial_dir)){
 			error_message = conn.error_message;
 			return false;
 		}
 
 		string base_name = get_newest_replica(replicas, snap.name);
-
-		var marker = new Json.Object();
-		marker.set_string_member("source-host", ReplicationConnection.hostname());
-		marker.set_string_member("app-version", AppVersion);
-		var marker_subvols = new Json.Object();
 
 		foreach(var subvol in snap.subvolumes_sorted){
 
@@ -704,6 +996,7 @@ public class Replication : GLib.Object {
 				string std_out, std_err;
 				if (exec_argv_sync({ "btrfs", "subvolume", "snapshot", "-r", subvol.path, cache }, out std_out, out std_err) != 0){
 					error_message = _("Failed to create a read-only snapshot") + ": %s (%s)".printf(cache, std_err.strip());
+					remove_partial(partial_dir);
 					return false;
 				}
 			}
@@ -711,6 +1004,15 @@ public class Replication : GLib.Object {
 			var cache_info = BtrfsSubvolumeInfo.query(cache);
 			if ((cache_info == null) || !cache_info.readonly){
 				error_message = _("Not a read-only subvolume") + ": %s".printf(cache);
+				remove_partial(partial_dir);
+				return false;
+			}
+
+			// btrfs send uses the received UUID instead of the UUID if one is
+			// set, copies could then be matched with the wrong parent
+			if (cache_info.received_uuid.length > 0){
+				error_message = _("The subvolume has a received UUID and cannot be sent safely") + ": %s".printf(subvol.path);
+				remove_partial(partial_dir);
 				return false;
 			}
 
@@ -721,36 +1023,30 @@ public class Replication : GLib.Object {
 				string base_cache = path_combine(path_combine(cache_dir_for(subvol.name), base_name), subvol.name);
 				var base_info = dir_exists(base_cache) ? BtrfsSubvolumeInfo.query(base_cache) : null;
 				var base_replica = conn.subvolume_info(path_combine(path_combine(conn.snapshots_dir, base_name), subvol.name));
-				if ((base_info != null) && base_info.readonly && (base_replica != null) && base_replica.readonly
+				if ((base_info != null) && base_info.readonly && (base_info.received_uuid.length == 0)
+					&& (base_replica != null) && base_replica.readonly
 					&& (base_replica.received_uuid == base_info.uuid)){
 					parent = base_cache;
 				}
 			}
 
-			string received = path_combine(target_dir, subvol.name);
-
-			if (conn.exists(received)){
-				// left over from an interrupted transfer
-				conn.delete_subvolume(received);
-			}
+			string received = path_combine(partial_dir, subvol.name);
 
 			set_status("%s: %s (%s)".printf(snap.name, subvol.name, (parent.length > 0) ? _("incremental") : _("full")));
 
 			task = new BtrfsSendTask();
 			task.progress.connect((bytes, seconds) => {
-				bytes_transferred = bytes;
+				bytes_transferred = bytes_done + bytes;
 			});
 
-			bool ok = task.run(cache, parent, conn.receive_command(target_dir));
+			bool ok = task.run(cache, parent, conn.receive_command(partial_dir), io_nice);
 			string task_error = task.error_message;
+			bytes_done += task.bytes_transferred;
 			task = null;
 
 			if (!ok){
 				error_message = _("Failed to send") + " %s/%s: %s".printf(snap.name, subvol.name, task_error);
-				if (conn.exists(received)){
-					conn.delete_subvolume(received);
-				}
-				conn.remove_empty_dir(target_dir);
+				remove_partial(partial_dir);
 				return false;
 			}
 
@@ -758,29 +1054,29 @@ public class Replication : GLib.Object {
 			var info = conn.subvolume_info(received);
 			if ((info == null) || !info.readonly || (info.received_uuid != cache_info.uuid)){
 				error_message = _("The received subvolume could not be verified") + ": %s".printf(received);
-				if (info != null){
-					conn.delete_subvolume(received);
-				}
+				remove_partial(partial_dir);
 				return false;
 			}
-
-			marker_subvols.set_string_member(subvol.name, info.received_uuid);
 		}
 
-		// info.json, then the marker that says that the copy is complete
-		if (!copy_info_json(snap, target_dir)){
+		// info.json, then the directory gets its final name: the copy is complete
+		if (!copy_info_json(snap, partial_dir)){
+			remove_partial(partial_dir);
 			return false;
 		}
 
-		marker.set_object_member("subvolumes", marker_subvols);
-		marker.set_string_member("completed", new DateTime.now_utc().to_unix().to_string());
+		if (conn.exists(target_dir)){
+			// an incomplete copy of an older version
+			remove_incomplete_replica(target_dir);
+		}
 
-		if (!conn.write_file(path_combine(target_dir, "replica.json"), json_to_string(marker))){
-			error_message = _("Failed to write file") + ": %s".printf(conn.error_message);
+		if (conn.exists(target_dir) || !conn.rename(partial_dir, target_dir)){
+			error_message = _("Failed to rename directory") + ": %s %s".printf(target_dir, conn.error_message);
+			remove_partial(partial_dir);
 			return false;
 		}
 
-		replicas[snap.name] = marker;
+		replicas[snap.name] = parse_json(file_read(path_combine(snap.path, "info.json"))) ?? new Json.Object();
 
 		return true;
 	}
@@ -814,8 +1110,8 @@ public class Replication : GLib.Object {
 
 		string dir = path_combine(conn.snapshots_dir, name);
 
-		// the marker first, so that a half-removed copy counts as incomplete
-		conn.remove_file(path_combine(dir, "replica.json"));
+		// info.json first, so that a half-removed copy counts as incomplete
+		conn.remove_file(path_combine(dir, "info.json"));
 		delete_replica_dir(dir);
 	}
 
@@ -824,7 +1120,32 @@ public class Replication : GLib.Object {
 		delete_replica_dir(dir);
 	}
 
+	// deletes the subvolumes of a copy that were received (read-only, with a
+	// received UUID), never subvolumes that were created on the target
 	private void delete_replica_dir(string dir){
+
+		foreach(string name in conn.list_dirs(dir)){
+			string path = path_combine(dir, name);
+			var info = conn.subvolume_info(path);
+			if (info == null){
+				continue; // a directory
+			}
+			if (info.readonly && (info.received_uuid.length > 0)){
+				conn.delete_subvolume(path);
+			}
+			else{
+				log_msg(_("Not removed, the subvolume was not received from this computer") + ": %s".printf(path));
+			}
+		}
+
+		conn.remove_file(path_combine(dir, "info.json"));
+		conn.remove_file(path_combine(dir, "info.json.tmp"));
+
+		conn.remove_empty_dir(dir);
+	}
+
+	// removes a directory that a snapshot is received into (all of it is ours)
+	private void remove_partial(string dir){
 
 		foreach(string name in conn.list_dirs(dir)){
 			string path = path_combine(dir, name);
@@ -833,25 +1154,56 @@ public class Replication : GLib.Object {
 			}
 		}
 
-		// the remaining files
-		conn.remove_file(path_combine(dir, "replica.json"));
 		conn.remove_file(path_combine(dir, "info.json"));
+		conn.remove_file(path_combine(dir, "info.json.tmp"));
 
 		conn.remove_empty_dir(dir);
+	}
+
+	// true if a snapshot was created after the newest copy of the last run
+	// that the target keeps snapshots of
+	private bool has_new_snapshots(){
+
+		var last = ReplicationStatus.load(target);
+
+		if (!last.ok || (last.newest.length == 0)){
+			return true;
+		}
+
+		foreach(var snap in App.repo.snapshots){
+
+			if (!snap.valid || snap.live || (snap.subvolumes.size == 0) || (strcmp(snap.name, last.newest) <= 0)){
+				continue;
+			}
+
+			var item = new ReplicationItem(snap.name, snap.date.to_unix(), snap.taglist, true, false);
+			foreach(string level in ReplicationPolicy.LEVELS){
+				if ((target.policy.get_keep(level) > 0) && item.has_tag(level)){
+					return true;
+				}
+			}
+		}
+
+		return false;
 	}
 
 	/*
 	 * Keeps the read-only snapshots of the newest copy on the target (the base
 	 * for the next transfer) and removes the others from the send cache.
 	 */
-	private void clean_cache(Gee.ArrayList<ReplicationItem> items){
-
+	private static string get_newest_copy(Gee.ArrayList<ReplicationItem> items){
 		string newest = "";
 		foreach(var item in items){
 			if (item.on_target && (strcmp(item.name, newest) > 0)){
 				newest = item.name;
 			}
 		}
+		return newest;
+	}
+
+	private void clean_cache(Gee.ArrayList<ReplicationItem> items){
+
+		string newest = get_newest_copy(items);
 
 		var dirs = new Gee.HashSet<string>();
 		dirs.add(cache_dir);
@@ -898,6 +1250,55 @@ public class Replication : GLib.Object {
 			}
 			dir_empty_delete(dir);
 		}
+
+		string status_file = ReplicationStatus.file_path(target);
+		if (file_exists(status_file)){
+			file_delete(status_file);
+		}
+	}
+
+	/*
+	 * Removes the send caches of targets that are not in the list anymore,
+	 * e.g. after the configuration file was edited. Does nothing for an empty
+	 * list, so that a configuration that could not be read removes nothing.
+	 */
+	public static void remove_orphaned_caches(Gee.ArrayList<ReplicationTarget> targets){
+
+		if ((targets.size == 0) || (App.repo == null) || (App.repo.mount_path.length == 0)){
+			return;
+		}
+
+		var ids = new Gee.HashSet<string>();
+		foreach(var target in targets){
+			ids.add(target.id);
+		}
+
+		var dirs = new Gee.HashSet<string>();
+		dirs.add(path_combine(App.repo.mount_path, "timeshift-btrfs/send-cache"));
+		dirs.add(path_combine(App.repo.get_mount_path(App.home_subvolume_name), "timeshift-btrfs/send-cache"));
+
+		var orphans = new Gee.HashSet<string>();
+
+		foreach(string dir in dirs){
+
+			if (!dir_exists(dir)){
+				continue;
+			}
+
+			foreach(string name in dir_list_names(dir)){
+				string id = name.has_suffix(".json") ? name.substring(0, name.length - 5) : name;
+				if (!ids.contains(id) && Regex.match_simple("^[A-Za-z0-9_-]+$", id)){
+					orphans.add(id);
+				}
+			}
+		}
+
+		foreach(string id in orphans){
+			log_msg(_("Removing the send cache of a removed target") + ": %s".printf(id));
+			var orphan = new ReplicationTarget();
+			orphan.id = id;
+			remove_cache(orphan);
+		}
 	}
 
 	private static Json.Object? parse_json(string? txt){
@@ -914,14 +1315,79 @@ public class Replication : GLib.Object {
 			return null;
 		}
 	}
+}
 
-	private static string json_to_string(Json.Object obj){
+// result of the last run for a target, shown in the settings ---------------
+
+public class ReplicationStatus : GLib.Object {
+
+	public int64 time = 0;     // 0: never run
+	public bool ok = false;
+	public string message = "";
+	public int sent = 0;
+	public string newest = ""; // newest snapshot on the target
+
+	// kept on the snapshot device next to the send cache of the target
+	public static string file_path(ReplicationTarget target){
+		if ((App.repo == null) || (App.repo.mount_path.length == 0)){
+			return "";
+		}
+		return path_combine(App.repo.mount_path, "timeshift-btrfs/send-cache/%s.json".printf(target.id));
+	}
+
+	public static ReplicationStatus load(ReplicationTarget target){
+
+		var status = new ReplicationStatus();
+		string path = file_path(target);
+
+		if ((path.length == 0) || !file_exists(path)){
+			return status;
+		}
+
+		try{
+			var parser = new Json.Parser();
+			parser.load_from_file(path);
+			var obj = parser.get_root().get_object();
+			status.time = int64.parse(json_get_string(obj, "time", "0"));
+			status.ok = json_get_bool(obj, "ok", false);
+			status.message = json_get_string(obj, "message", "");
+			status.sent = json_get_int(obj, "sent", 0);
+			status.newest = json_get_string(obj, "newest", "");
+		}
+		catch (Error e){
+			log_debug(e.message);
+		}
+
+		return status;
+	}
+
+	public void save(ReplicationTarget target){
+
+		string path = file_path(target);
+		if (path.length == 0){
+			return;
+		}
+
+		var obj = new Json.Object();
+		obj.set_string_member("time", time.to_string());
+		obj.set_string_member("ok", ok.to_string());
+		obj.set_string_member("message", message);
+		obj.set_string_member("sent", sent.to_string());
+		obj.set_string_member("newest", newest);
+
 		var node = new Json.Node(Json.NodeType.OBJECT);
 		node.set_object(obj);
-		var gen = new Json.Generator();
-		gen.pretty = true;
-		gen.indent = 2;
-		gen.set_root(node);
-		return gen.to_data(null);
+		var json = new Json.Generator();
+		json.pretty = true;
+		json.indent = 2;
+		json.set_root(node);
+
+		try{
+			dir_create(file_parent(path));
+			FileUtils.set_contents(path, json.to_data(null));
+		}
+		catch (Error e){
+			log_debug(e.message);
+		}
 	}
 }

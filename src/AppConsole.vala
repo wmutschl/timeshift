@@ -252,6 +252,20 @@ public class AppConsole : GLib.Object {
 					App.app_mode = "replicate";
 					break;
 
+				case "--replication-target":
+					App.cmd_replication_target = args[++k];
+					break;
+
+				case "--dry-run":
+					App.cmd_dry_run = true;
+					break;
+
+				case "--list-targets":
+					App.app_mode = "list-targets";
+					LOG_TIMESTAMP = false;
+					LOG_DEBUG = false;
+					break;
+
 				case "--package-hook":
 					LOG_TIMESTAMP = false;
 					LOG_DEBUG = false;
@@ -370,6 +384,11 @@ public class AppConsole : GLib.Object {
 				is_success = replicate();
 				return is_success;
 
+			case "list-targets":
+				LOG_ENABLE = true;
+				list_replication_targets();
+				return true;
+
 			case "list-snapshots":
 				LOG_ENABLE = true;
 
@@ -442,6 +461,9 @@ public class AppConsole : GLib.Object {
 		msg += "\n";
 		msg += _("Replication (BTRFS)") + ":\n";
 		msg += "  --replicate                " + _("Send snapshots to the enabled replication targets") + "\n";
+		msg += "  --replication-target <id>  " + _("Send snapshots only to this target (name or ID)") + "\n";
+		msg += "  --dry-run                  " + _("Show what would be sent and removed") + "\n";
+		msg += "  --list-targets             " + _("List replication targets") + "\n";
 		msg += "\n";
 		msg += _("Global") + ":\n";
 		msg += "  --snapshot-device <device> " + _("Specify backup device (default: config)") + "\n";
@@ -672,32 +694,102 @@ public class AppConsole : GLib.Object {
 		return App.create_snapshot(ondemand, null);
 	}
 
-	// sends the snapshots to all enabled replication targets
+	// sends the snapshots to all enabled replication targets, or to the
+	// target given with --replication-target (even if it is disabled)
 	private bool replicate(){
 
 		if (App.live_system()){
 			return true;
 		}
 
-		select_snapshot_device(false);
+		var targets = new Gee.ArrayList<ReplicationTarget>();
 
-		bool ok = true;
-		int count = 0;
-
-		foreach(var target in App.replication_targets){
-			if (!target.enabled){
-				continue;
+		if (App.cmd_replication_target.length > 0){
+			var target = ReplicationTarget.find(App.replication_targets, App.cmd_replication_target);
+			if (target == null){
+				log_error(_("Replication target not found") + ": '%s'".printf(App.cmd_replication_target));
+				log_error(_("Run 'timeshift --list-targets' to list the targets"));
+				return false;
 			}
-			count++;
-			var replication = new Replication(target);
-			ok = replication.run() && ok;
+			targets.add(target);
+		}
+		else{
+			foreach(var target in App.replication_targets){
+				if (target.enabled){
+					targets.add(target);
+				}
+			}
+			if (targets.size == 0){
+				log_msg(_("No replication targets are enabled"));
+				return true;
+			}
 		}
 
-		if (count == 0){
-			log_msg(_("No replication targets are enabled"));
+		select_snapshot_device(false);
+
+		if (!App.cmd_dry_run){
+			Replication.remove_orphaned_caches(App.replication_targets);
+		}
+
+		bool ok = true;
+		bool changed = false;
+
+		foreach(var target in targets){
+			var replication = new Replication(target);
+			replication.dry_run = App.cmd_dry_run;
+			replication.io_nice = App.cmd_scripted; // scheduled runs
+			replication.skip_unavailable = App.cmd_scripted && (App.cmd_replication_target.length == 0);
+			ok = replication.run() && ok;
+			changed = changed || replication.target_changed;
+		}
+
+		// e.g. the filesystem of an SSH target was recorded
+		if (changed){
+			ReplicationTarget.save_all(App.replication_targets, App.replication_conf_path);
 		}
 
 		return ok;
+	}
+
+	private void list_replication_targets(){
+
+		if (App.replication_targets.size == 0){
+			log_msg(_("No replication targets"));
+			return;
+		}
+
+		string[,] grid = new string[App.replication_targets.size + 1, 5];
+		bool[] right_align = { false, false, false, false, false };
+
+		int row = 0;
+		int col = -1;
+		grid[row, ++col] = _("Name");
+		grid[row, ++col] = _("ID");
+		grid[row, ++col] = _("Scheduled");
+		grid[row, ++col] = _("Location");
+		grid[row, ++col] = _("Last Run");
+		row++;
+
+		foreach(var target in App.replication_targets){
+
+			var status = ReplicationStatus.load(target);
+			string last_run = "";
+			if (status.time > 0){
+				var dt = new DateTime.from_unix_local(status.time);
+				last_run = dt.format("%Y-%m-%d %H:%M") + " " + (status.ok ? _("OK") : _("Failed"));
+			}
+
+			col = -1;
+			grid[row, ++col] = target.name;
+			grid[row, ++col] = target.id;
+			grid[row, ++col] = target.enabled ? _("Yes") : _("No");
+			grid[row, ++col] = target.location;
+			grid[row, ++col] = last_run;
+			row++;
+		}
+
+		print_grid(grid, right_align);
+		log_msg("");
 	}
 
 	// called by the APT and DNF5 hooks before packages are installed, upgraded or removed
