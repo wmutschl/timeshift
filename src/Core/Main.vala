@@ -2116,6 +2116,17 @@ public class Main : GLib.Object{
 			snapshot.paths[subvol.name] = snapshot_paths[subvol.name];
 		}
 		snapshot.update_control_file(); // save subvolume info
+
+		// /boot is part of the snapshot if it is not a separate mount, or if
+		// it is a subvolume that was included
+		bool boot_in_snapshot = (sys_boot == null);
+		foreach(var subvol in snapshot_subvols){
+			if (subvol.mount_point == "/boot"){
+				boot_in_snapshot = true;
+			}
+		}
+
+		snapshot.write_boot_info(Posix.utsname().release, boot_in_snapshot);
 		
 		// Perform any post-backup actions
 		this.run_post_backup_hooks(snapshot_path);

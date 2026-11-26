@@ -463,6 +463,59 @@ public class Snapshot : GLib.Object{
 		config.set_object_member("mount-points", mount_points);
 	}
 
+	/*
+	 * Records which kernels the snapshot can boot, for restoring and for
+	 * boot entries of snapshots: the running kernel, the kernel versions with
+	 * modules in the snapshot (usr/lib/modules of the root subvolume) and
+	 * whether /boot (kernels and initramfs) is part of the snapshot.
+	 */
+	public void write_boot_info(string kernel_running, bool boot_in_snapshot){
+
+		var kernels = new Gee.ArrayList<string>();
+
+		string root_path = path_combine(paths.has_key(root_subvolume_name) ? paths[root_subvolume_name] : path, root_subvolume_name);
+
+		foreach(string modules_dir in new string[] { "usr/lib/modules", "lib/modules" }){
+			string dir = path_combine(root_path, modules_dir);
+			if (!dir_exists(dir)){ continue; }
+			foreach(string name in dir_list_names(dir)){
+				if (!kernels.contains(name)){
+					kernels.add(name);
+				}
+			}
+			break;
+		}
+
+		kernels.sort();
+
+		try{
+			string ctl_file = path + "/info.json";
+			var parser = new Json.Parser();
+			parser.load_from_file(ctl_file);
+			var node = parser.get_root();
+			var config = node.get_object();
+
+			var arr = new Json.Array();
+			foreach(string kernel in kernels){
+				arr.add_string_element(kernel);
+			}
+
+			config.set_string_member("kernel-running", kernel_running);
+			config.set_array_member("kernels", arr);
+			config.set_string_member("boot-in-snapshot", boot_in_snapshot.to_string());
+
+			var json = new Json.Generator();
+			json.pretty = true;
+			json.indent = 2;
+			node.set_object(config);
+			json.set_root(node);
+			json.to_file(ctl_file);
+		}
+		catch (Error e){
+			log_error(e.message);
+		}
+	}
+
 	public void remove_control_file(){
 		
 		string ctl_file = path + "/info.json";
