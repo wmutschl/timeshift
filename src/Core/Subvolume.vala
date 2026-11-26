@@ -40,6 +40,10 @@ public class Subvolume : GLib.Object{
 
 	public string mount_path = "";
 
+	// where the subvolume is mounted in the system (e.g. "/" or "/home"),
+	// empty if unknown
+	public string mount_point = "";
+
 	//parent
 	public SnapshotRepo? repo;
 	
@@ -51,7 +55,7 @@ public class Subvolume : GLib.Object{
 		this.repo = parent_repo;
 
 		if (repo != null){
-			this.mount_path = repo.mount_paths[name];
+			this.mount_path = repo.get_mount_path(name);
 		}
 	}
 
@@ -107,6 +111,7 @@ public class Subvolume : GLib.Object{
 				log_debug("Found subvolume: %s, on device: %s".printf(item.subvolume_name(), dev_name));
 				
 				var subvol = new Subvolume(item.subvolume_name(), item.mount_point, dev_uuid, repo);
+				subvol.mount_point = item.mount_point;
 				map.set(subvol.name, subvol);
 			}
 		}
@@ -189,7 +194,7 @@ public class Subvolume : GLib.Object{
 				// Check if qgroup still exists before trying to destroy it.
 				// The qgroup may have been auto-destroyed when the subvolume was deleted.
 				string qgroup_id = "0/%ld".printf(id);
-				cmd = { "btrfs", "qgroup", "show", "-f", repo.mount_paths[name] };
+				cmd = { "btrfs", "qgroup", "show", "-f", repo.get_mount_path(name) };
 				log_debug(argv_to_string(cmd));
 				ret_val = exec_argv_sync(cmd, out std_out, out std_err);
 
@@ -200,7 +205,7 @@ public class Subvolume : GLib.Object{
 				} else {
 					log_msg("%s: %s".printf(_("Destroying qgroup"), qgroup_id));
 
-					cmd = { "btrfs", "qgroup", "destroy", qgroup_id, repo.mount_paths[name] };
+					cmd = { "btrfs", "qgroup", "destroy", qgroup_id, repo.get_mount_path(name) };
 					log_debug(argv_to_string(cmd));
 					ret_val = exec_argv_sync(cmd, out std_out, out std_err);
 					if (ret_val != 0){

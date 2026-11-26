@@ -167,6 +167,15 @@ public class SnapshotRepo : GLib.Object{
 		}
 	}
 	
+	// mount path of the btrfs filesystem that contains the given subvolume,
+	// the snapshot device unless it is the home subvolume on another device
+	public string get_mount_path(string subvol_name){
+		if (mount_paths.has_key(subvol_name) && (mount_paths[subvol_name].length > 0)){
+			return mount_paths[subvol_name];
+		}
+		return mount_path;
+	}
+
 	public string snapshots_path {
 		owned get{
 			return path_combine(timeshift_path, "snapshots");

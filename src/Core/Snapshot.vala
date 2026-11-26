@@ -212,55 +212,14 @@ public class Snapshot : GLib.Object{
 			live = json_get_bool(config,"live",false);
 			string type = config.get_string_member_with_default("type", "rsync");
 
-			string extension = (type == "btrfs") ? App.root_subvolume_name : "localhost";
-			distro = LinuxDistro.get_dist_info(path_combine(path, extension));
-
 			//log_debug("repo.mount_path: %s".printf(repo.mount_path));
 
-			if (config.has_member("subvolumes")){
-
-				var subvols = (Json.Object) config.get_object_member("subvolumes");
-
-				foreach(string subvol_name in subvols.get_members()){
-					
-					if ((subvol_name != App.root_subvolume_name)&&(subvol_name != App.home_subvolume_name)){ continue; }
-					
-					paths[subvol_name] = path.replace(repo.mount_path, repo.mount_paths[subvol_name]);
-					
-					var subvol_path = path_combine(paths[subvol_name], subvol_name);
-					
-					if (!dir_exists(subvol_path)){ continue; }
-
-					//log_debug("subvol_path: %s".printf(subvol_path));
-					
-					var subvolume = new Subvolume(subvol_name, subvol_path, "", repo); //subvolumes.get(subvol_name);
-					subvolumes.set(subvol_name, subvolume);
-					
-					int index = -1;
-					
-					foreach(Json.Node jnode in subvols.get_array_member(subvol_name).get_elements()) {
-						
-						string item = jnode.get_string();
-						switch (++index){
-							case 0:
-								subvolume.name = item;
-								break;
-							case 1:
-								subvolume.id = long.parse(item);
-								break;
-							case 2:
-								subvolume.total_bytes = int64.parse(item);
-								break;
-							case 3:
-								subvolume.unshared_bytes = int64.parse(item);
-								break;
-							case 4:
-								subvolume.device_uuid = item.strip();
-								break;
-						}
-					}
-				}
+			if (type == "btrfs"){
+				read_subvolumes(config);
 			}
+
+			string extension = (type == "btrfs") ? root_subvolume_name : "localhost";
+			distro = LinuxDistro.get_dist_info(path_combine(path, extension));
 			
 			string delete_trigger_file = path + "/delete";
 			if (file_exists(delete_trigger_file)){
@@ -272,6 +231,119 @@ public class Snapshot : GLib.Object{
 		}
 		
 		//log_debug("read_control_file(): exit");
+	}
+
+	private void read_subvolumes(Json.Object config){
+
+		/* The subvolumes of a snapshot are read from its own info.json, never
+		 * from the current configuration, so that snapshots taken with another
+		 * subvolume layout can still be listed, restored and deleted.
+		 * 'subvolumes' lists name, id, sizes and device for each subvolume.
+		 * 'mount-points' maps each subvolume to the path where it was mounted
+		 * in the system (written since subvolumes other than / and /home are
+		 * supported). */
+
+		var names = new Gee.ArrayList<string>();
+		var mount_points = new Gee.HashMap<string,string>();
+		Json.Object? subvols = null;
+
+		if (config.has_member("subvolumes")){
+			subvols = config.get_object_member("subvolumes");
+			foreach(string subvol_name in subvols.get_members()){
+				names.add(subvol_name);
+			}
+		}
+
+		if (config.has_member("mount-points")){
+			var mps = config.get_object_member("mount-points");
+			foreach(string subvol_name in mps.get_members()){
+				mount_points[subvol_name] = mps.get_string_member(subvol_name);
+				if (!names.contains(subvol_name)){
+					names.add(subvol_name); // dropped by an older version
+				}
+			}
+		}
+
+		foreach(string subvol_name in names){
+
+			if (!Main.is_valid_subvolume_name(subvol_name)){ continue; }
+
+			paths[subvol_name] = path.replace(repo.mount_path, repo.get_mount_path(subvol_name));
+
+			var subvol_path = path_combine(paths[subvol_name], subvol_name);
+
+			if (!dir_exists(subvol_path)){ continue; }
+
+			//log_debug("subvol_path: %s".printf(subvol_path));
+
+			var subvolume = new Subvolume(subvol_name, subvol_path, "", repo);
+			subvolumes.set(subvol_name, subvolume);
+
+			if (mount_points.has_key(subvol_name)){
+				subvolume.mount_point = mount_points[subvol_name];
+			}
+			else{
+				subvolume.mount_point = guess_mount_point(subvol_name);
+			}
+
+			if ((subvols == null) || !subvols.has_member(subvol_name)){ continue; }
+
+			int index = -1;
+
+			foreach(Json.Node jnode in subvols.get_array_member(subvol_name).get_elements()) {
+
+				string item = jnode.get_string();
+				switch (++index){
+					case 0:
+						// name, same as the key
+						break;
+					case 1:
+						subvolume.id = long.parse(item);
+						break;
+					case 2:
+						subvolume.total_bytes = int64.parse(item);
+						break;
+					case 3:
+						subvolume.unshared_bytes = int64.parse(item);
+						break;
+					case 4:
+						subvolume.device_uuid = item.strip();
+						break;
+				}
+			}
+		}
+	}
+
+	private static string guess_mount_point(string subvol_name){
+
+		// snapshots taken by older versions don't record mount points,
+		// they only contain the subvolumes mounted at / and /home
+
+		if ((subvol_name == "@") || (subvol_name == App.root_subvolume_name)){
+			return "/";
+		}
+		else if ((subvol_name == "@home") || (subvol_name == App.home_subvolume_name)){
+			return "/home";
+		}
+
+		return "";
+	}
+
+	// name of the subvolume that was mounted at /
+	public string root_subvolume_name {
+		owned get {
+			var subvol = get_subvolume_by_mount_point("/");
+			return (subvol != null) ? subvol.name : App.root_subvolume_name;
+		}
+	}
+
+	public Subvolume? get_subvolume_by_mount_point(string mount_point){
+		foreach(var subvol in subvolumes.values){
+			if (subvol.mount_point == mount_point){
+				return subvol;
+			}
+		}
+		return null;
 	}
 
 	public void read_exclude_list(){
@@ -305,7 +377,7 @@ public class Snapshot : GLib.Object{
 		string fstab_path = path_combine(path, "/localhost/etc/fstab");
 		
 		if (btrfs_mode){
-			fstab_path = path_combine(path, @"/$(App.root_subvolume_name)/etc/fstab");
+			fstab_path = path_combine(path_combine(path, root_subvolume_name), "etc/fstab");
 		}
 		
 		fstab_list = FsTabEntry.read_file(fstab_path);
@@ -316,7 +388,7 @@ public class Snapshot : GLib.Object{
 		string crypttab_path = path_combine(path, "/localhost/etc/crypttab");
 		
 		if (btrfs_mode){
-			crypttab_path = path_combine(path, @"/$(App.root_subvolume_name)/etc/crypttab");
+			crypttab_path = path_combine(path_combine(path, root_subvolume_name), "etc/crypttab");
 		}
 		
 		cryttab_list = CryptTabEntry.read_file(crypttab_path);
@@ -345,17 +417,7 @@ public class Snapshot : GLib.Object{
 				config.set_string_member("live", live.to_string());
 
 				if (btrfs_mode){
-					var subvols = new Json.Object();
-					config.set_object_member("subvolumes",subvols);
-					foreach(var subvol in subvolumes.values){
-						Json.Array arr = new Json.Array();
-						arr.add_string_element(subvol.name);
-						arr.add_string_element(subvol.id.to_string());
-						arr.add_string_element(subvol.total_bytes.to_string());
-						arr.add_string_element(subvol.unshared_bytes.to_string());
-						arr.add_string_element(subvol.device_uuid);
-						subvols.set_array_member(subvol.name,arr);
-					}
+					write_subvolumes(config);
 				}
 				
 				var json = new Json.Generator();
@@ -370,6 +432,35 @@ public class Snapshot : GLib.Object{
 		} catch (Error e) {
 			log_error (e.message);
 		}
+	}
+
+	private void write_subvolumes(Json.Object config){
+
+		// update the entries of the loaded subvolumes and keep the others,
+		// e.g. a subvolume on a device that is currently not available
+
+		Json.Object subvols = config.has_member("subvolumes") ?
+			config.get_object_member("subvolumes") : new Json.Object();
+
+		Json.Object mount_points = config.has_member("mount-points") ?
+			config.get_object_member("mount-points") : new Json.Object();
+
+		foreach(var subvol in subvolumes.values){
+			Json.Array arr = new Json.Array();
+			arr.add_string_element(subvol.name);
+			arr.add_string_element(subvol.id.to_string());
+			arr.add_string_element(subvol.total_bytes.to_string());
+			arr.add_string_element(subvol.unshared_bytes.to_string());
+			arr.add_string_element(subvol.device_uuid);
+			subvols.set_array_member(subvol.name, arr);
+
+			if (subvol.mount_point.length > 0){
+				mount_points.set_string_member(subvol.name, subvol.mount_point);
+			}
+		}
+
+		config.set_object_member("subvolumes", subvols);
+		config.set_object_member("mount-points", mount_points);
 	}
 
 	public void remove_control_file(){
@@ -419,12 +510,8 @@ public class Snapshot : GLib.Object{
 	// check
 	
 	public bool has_subvolumes(){
-		foreach(FsTabEntry en in fstab_list){
-			if (en.options.contains("subvol=" + App.root_subvolume_name)){
-				return true;
-			}
-		}
-		return false;
+		var entry = FsTabEntry.find_entry_by_mount_point(fstab_list, "/");
+		return (entry != null) && (entry.subvolume_name().length > 0);
 	}
 
 	public Gee.ArrayList<Subvolume> subvolumes_sorted {
