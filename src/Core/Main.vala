@@ -57,6 +57,9 @@ public class Main : GLib.Object{
 	// in snapshots, and that are restored by default
 	public Gee.ArrayList<string> include_btrfs_subvolumes_for_backup;
 	public Gee.ArrayList<string> include_btrfs_subvolumes_for_restore;
+
+	// other BTRFS filesystems that receive copies of the snapshots
+	public Gee.ArrayList<ReplicationTarget> replication_targets;
     public static bool btrfs_version__can_recursive_delete = false;
 
 	// names of the subvolumes mounted at / and /home, detected from the running
@@ -276,7 +279,7 @@ public class Main : GLib.Object{
 
 		app_lock = new AppLock();
 		
-		if (!app_lock.create("timeshift", app_mode)){
+		if (!app_lock.create((app_mode == "replicate") ? "timeshift-replicate" : "timeshift", app_mode)){
 			if (gui_mode){
 				string msg = "";
 				if (app_lock.lock_message == "backup"){
@@ -343,6 +346,7 @@ public class Main : GLib.Object{
 		sys_subvolumes = new Gee.HashMap<string, Subvolume>();
 		include_btrfs_subvolumes_for_backup = new Gee.ArrayList<string>();
 		include_btrfs_subvolumes_for_restore = new Gee.ArrayList<string>();
+		replication_targets = new Gee.ArrayList<ReplicationTarget>();
 		exclude_app_names = new Gee.ArrayList<string>();
 		add_default_exclude_entries();
 		//add_app_exclude_entries();
@@ -873,6 +877,10 @@ public class Main : GLib.Object{
 
 				case "--package-hook":
 					app_mode = "package-hook";
+					break;
+
+				case "--replicate":
+					app_mode = "replicate";
 					break;
 
 				case "--list":
@@ -3793,6 +3801,12 @@ public class Main : GLib.Object{
 			arr_subvols.add_string_element(mount_point);
 		}
 		config.set_array_member("include_btrfs_subvolumes_for_restore", arr_subvols);
+
+		var arr_targets = new Json.Array();
+		foreach(var target in replication_targets){
+			arr_targets.add_object_element(target.to_json());
+		}
+		config.set_array_member("replication_targets", arr_targets);
 		config.set_string_member("stop_cron_emails", stop_cron_emails.to_string());
 
 		config.set_string_member("schedule_monthly",  (Tags.Monthly in App.schedule).to_string());
@@ -3914,6 +3928,15 @@ public class Main : GLib.Object{
 
 		read_mount_point_list(config, "include_btrfs_subvolumes_for_backup", include_btrfs_subvolumes_for_backup);
 		read_mount_point_list(config, "include_btrfs_subvolumes_for_restore", include_btrfs_subvolumes_for_restore);
+
+		replication_targets.clear();
+		if (config.has_member("replication_targets")){
+			foreach (Json.Node jnode in config.get_array_member("replication_targets").get_elements()){
+				if (jnode.get_node_type() == Json.NodeType.OBJECT){
+					replication_targets.add(ReplicationTarget.from_json(jnode.get_object()));
+				}
+			}
+		}
 		stop_cron_emails = json_get_bool(config, "stop_cron_emails", stop_cron_emails);
 
 		if (cmd_btrfs_mode != null){
@@ -4904,6 +4927,18 @@ public class Main : GLib.Object{
 
 		// snapshots before package manager transactions, BTRFS mode only
 		PackageManagerHooks.update(btrfs_mode && (Tags.Package in schedule));
+
+		// copies of the snapshots on other filesystems, BTRFS mode only
+		bool replicate = false;
+		foreach(var target in replication_targets){
+			replicate = replicate || target.enabled;
+		}
+		if (btrfs_mode && replicate){
+			CronTab.add_script_file("timeshift-replicate", "d", "30 * * * * root timeshift --replicate --scripted", stop_cron_emails);
+		}
+		else{
+			CronTab.remove_script_file("timeshift-replicate", "d");
+		}
 
 		// remove entries created by previous versions -----------
 		

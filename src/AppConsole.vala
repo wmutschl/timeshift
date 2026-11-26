@@ -226,6 +226,12 @@ public class AppConsole : GLib.Object {
 					App.parse_cmd_tags(args[++k]);
 					break;
 
+				case "--replicate":
+					LOG_TIMESTAMP = false;
+					LOG_DEBUG = false;
+					App.app_mode = "replicate";
+					break;
+
 				case "--package-hook":
 					LOG_TIMESTAMP = false;
 					LOG_DEBUG = false;
@@ -340,6 +346,10 @@ public class AppConsole : GLib.Object {
 				create_package_snapshot();
 				return true; // never fail the package manager
 
+			case "replicate":
+				is_success = replicate();
+				return is_success;
+
 			case "list-snapshots":
 				LOG_ENABLE = true;
 
@@ -409,6 +419,9 @@ public class AppConsole : GLib.Object {
 		msg += _("Delete") + ":\n";
 		msg += "  --delete                   " + _("Delete snapshot") + "\n";
 		msg += "  --delete-all               " + _("Delete all snapshots") + "\n";
+		msg += "\n";
+		msg += _("Replication (BTRFS)") + ":\n";
+		msg += "  --replicate                " + _("Send snapshots to the enabled replication targets") + "\n";
 		msg += "\n";
 		msg += _("Global") + ":\n";
 		msg += "  --snapshot-device <device> " + _("Specify backup device (default: config)") + "\n";
@@ -637,6 +650,34 @@ public class AppConsole : GLib.Object {
 	private bool create_snapshot(bool ondemand){
 		select_snapshot_device(false);
 		return App.create_snapshot(ondemand, null);
+	}
+
+	// sends the snapshots to all enabled replication targets
+	private bool replicate(){
+
+		if (App.live_system()){
+			return true;
+		}
+
+		select_snapshot_device(false);
+
+		bool ok = true;
+		int count = 0;
+
+		foreach(var target in App.replication_targets){
+			if (!target.enabled){
+				continue;
+			}
+			count++;
+			var replication = new Replication(target);
+			ok = replication.run() && ok;
+		}
+
+		if (count == 0){
+			log_msg(_("No replication targets are enabled"));
+		}
+
+		return ok;
 	}
 
 	// called by the APT and DNF5 hooks before packages are installed, upgraded or removed

@@ -23,3 +23,18 @@ package_transaction_test = executable(
 )
 
 test('package-transaction', package_transaction_test)
+
+replication_planner_source = configure_file(
+  input: '../src/Core/ReplicationPlanner.vala',
+  output: 'ReplicationPlanner.vala',
+  copy: true,
+)
+
+replication_planner_test = executable(
+  'replication-planner-test',
+  files('ReplicationPlannerTest.vala'),
+  replication_planner_source,
+  dependencies: test_dependencies,
+)
+
+test('replication-planner', replication_planner_test)
