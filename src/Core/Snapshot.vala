@@ -363,7 +363,8 @@ public class Snapshot : GLib.Object{
 				json.indent = 2;
 				node.set_object(config);
 				json.set_root(node);
-				f.delete();
+				// replaces the file atomically, never delete it first: a snapshot
+				// without info.json is considered invalid and gets removed
 				json.to_file(ctl_file);
 			}
 		} catch (Error e) {
@@ -402,11 +403,7 @@ public class Snapshot : GLib.Object{
 		json.set_root(node);
 
 		try{
-			var f = File.new_for_path(ctl_path);
-			if (f.query_exists()){
-				f.delete();
-			}
-
+			// replaces an existing file atomically
 			json.to_file(ctl_path);
 		} catch (Error e) {
 	        log_error (e.message);
