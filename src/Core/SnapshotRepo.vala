@@ -726,7 +726,7 @@ public class SnapshotRepo : GLib.Object{
 						snap.remove_tag(level);
 						snaps_count--;
 					
-						log_msg(_("Snapshot") + " '%s' ".printf(list[0].name) + _("un-tagged") + " '%s'".printf(level.name()));
+						log_msg(_("Snapshot") + " '%s' ".printf(snap.name) + _("un-tagged") + " '%s'".printf(level.name()));
 					}
 				}
 			}
