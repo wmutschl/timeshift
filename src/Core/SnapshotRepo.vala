@@ -512,7 +512,20 @@ public class SnapshotRepo : GLib.Object{
 		log_debug("root_path=%s".printf(root_path));
 		log_debug("btrfs_mode=%s".printf(btrfs_mode.to_string()));
 		if (btrfs_mode){
-			if ((mount_path.length == 0) || !dir_exists(root_path)){
+
+			bool ok = (mount_path.length > 0) && dir_exists(root_path);
+
+			// When Timeshift does not run on a btrfs system (e.g. in a live session),
+			// snapshots on the device can be restored and deleted even if the root
+			// subvolume has another name than the one Timeshift expects. The names
+			// are taken from each snapshot.
+			if (!ok && (mount_path.length > 0) && !App.system_on_btrfs_subvolume()
+				&& dir_exists(path_combine(mount_path, "timeshift-btrfs/snapshots"))){
+
+				ok = true;
+			}
+
+			if (!ok){
 				status_message = _("Selected snapshot device is not a system disk");
 				status_details = _("Select BTRFS system disk with root subvolume (%s)").printf(App.root_subvolume_name);
 				status_code = SnapshotLocationStatus.NO_BTRFS_SYSTEM;

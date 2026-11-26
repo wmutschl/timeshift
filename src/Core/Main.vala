@@ -514,8 +514,7 @@ public class Main : GLib.Object{
 		title = "";
 		msg = "";
 
-		if (!sys_subvolumes.has_key(root_subvolume_name)
-			|| (sys_subvolumes[root_subvolume_name].path != "/")){
+		if (!system_on_btrfs_subvolume()){
 
 			title = _("The system partition has an unsupported subvolume layout.");
 			msg = _("The root filesystem must be mounted from a BTRFS subvolume.");
@@ -537,6 +536,12 @@ public class Main : GLib.Object{
 		}
 
 		return true;
+	}
+
+	// true if the running system's root filesystem is mounted from a btrfs subvolume
+	public bool system_on_btrfs_subvolume(){
+		return sys_subvolumes.has_key(root_subvolume_name)
+			&& (sys_subvolumes[root_subvolume_name].path == "/");
 	}
 
 	/*
@@ -1341,7 +1346,7 @@ public class Main : GLib.Object{
         if (_live_system == -1) {
             var cmdline = file_read("/proc/cmdline");
 
-            if (cmdline.contains("boot=casper") || cmdline.contains("boot=live")) {
+            if (cmdline.contains("boot=casper") || cmdline.contains("boot=live") || cmdline.contains("rd.live.image")) {
                 log_msg ("Live Session detected, backup is disabled.");
                 _live_system = 1;
             } else {
