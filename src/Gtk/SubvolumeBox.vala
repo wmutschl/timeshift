@@ -39,6 +39,7 @@ class SubvolumeBox : Gtk.Box{
 
 	private Gtk.TreeView treeview;
 	private Gtk.Label lbl_message;
+	private Gtk.Label lbl_home_note;
 	private Gtk.Window parent_window;
 	private bool restore_mode = false;
 
@@ -69,6 +70,10 @@ class SubvolumeBox : Gtk.Box{
 
 		if (!restore_mode){
 			add_note(_("Subvolumes that are not included are left unchanged when a snapshot is restored, e.g. a subvolume for logs or caches. Nested subvolumes inside the root subvolume (e.g. created by Docker) are never included."));
+
+			// shown by refresh() on systems without a subvolume for /home
+			lbl_home_note = add_note("");
+			lbl_home_note.no_show_all = true;
 		}
 
 		refresh();
@@ -172,7 +177,7 @@ class SubvolumeBox : Gtk.Box{
 		});
 	}
 
-	private void add_note(string text){
+	private Gtk.Label add_note(string text){
 
 		var label = new Gtk.Label("<i>%s</i>".printf(escape_html(text)));
 		label.set_use_markup(true);
@@ -181,6 +186,7 @@ class SubvolumeBox : Gtk.Box{
 		label.wrap_mode = Pango.WrapMode.WORD;
 		label.max_width_chars = 60;
 		add(label);
+		return label;
 	}
 
 	private bool treeview_query_tooltip(int x, int y, bool keyboard_tooltip, Tooltip tooltip){
@@ -274,6 +280,11 @@ class SubvolumeBox : Gtk.Box{
 				model.append(out iter);
 				model.set (iter, 0, subvol);
 			}
+
+			lbl_home_note.label = "<i>%s</i>".printf(escape_html(
+				_("/home is part of the root subvolume %s, so snapshots include the home directories and restoring a snapshot restores them as well.")
+				.printf(App.root_subvolume_name)));
+			lbl_home_note.visible = App.home_in_root_subvolume();
 		}
 
 		show_all();

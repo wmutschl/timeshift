@@ -347,6 +347,35 @@ public class Snapshot : GLib.Object{
 		}
 	}
 
+	// true if /home was a directory inside the root subvolume of this snapshot
+	// (e.g. Debian's @rootfs), so restoring it restores the home directories too
+	public bool home_in_root_subvolume {
+		get {
+			if (!btrfs_mode || (get_subvolume_by_mount_point("/home") != null)){
+				return false;
+			}
+			// /home was mounted from a subvolume or partition of its own; files
+			// below its mount point are hidden and not the home directories
+			if (FsTabEntry.find_entry_by_mount_point(fstab_list, "/home") != null){
+				return false;
+			}
+			string home = path_combine(path_combine(path, root_subvolume_name), "home");
+			if (FileUtils.test(home, FileTest.IS_SYMLINK) || !dir_exists(home)){
+				return false;
+			}
+			// nested subvolumes and mount points (e.g. of a home directory with a
+			// subvolume or partition of its own) are empty directories in a snapshot
+			foreach(string name in dir_list_names(home)){
+				string item = path_combine(home, name);
+				if (FileUtils.test(item, FileTest.IS_SYMLINK)){ continue; }
+				if (FsTabEntry.find_entry_by_mount_point(fstab_list, "/home/" + name) != null){ continue; }
+				if (FileUtils.test(item, FileTest.IS_DIR) && dir_is_empty(item)){ continue; }
+				return true;
+			}
+			return false;
+		}
+	}
+
 	public Subvolume? get_subvolume_by_mount_point(string mount_point){
 		foreach(var subvol in subvolumes.values){
 			if (subvol.mount_point == mount_point){

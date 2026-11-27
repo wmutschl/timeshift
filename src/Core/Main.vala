@@ -2835,6 +2835,12 @@ public class Main : GLib.Object{
 			msg += "%s\n".printf(txt);
 		}
 
+		if (btrfs_mode && (snapshot_to_restore != null) && snapshot_to_restore.home_in_root_subvolume){
+			txt = _("The home directories are restored as well, because /home is part of the root subvolume %s.")
+				.printf(snapshot_to_restore.root_subvolume_name);
+			msg += formatted ? "\n%s\n".printf(escape_html(txt)) : "%s\n".printf(txt);
+		}
+
 		msg_devices = msg;
 
 		//msg += _("Files will be overwritten on the target device!") + "\n";
@@ -4344,6 +4350,49 @@ public class Main : GLib.Object{
 
 		log_debug("BTRFS root subvolume: '%s', home subvolume: '%s'".printf(
 			root_subvolume_name, home_subvolume_name));
+	}
+
+	public bool home_in_root_subvolume(){
+
+		/* True if /home is a directory inside the root subvolume instead of a
+		 * subvolume or partition of its own (e.g. Debian's @rootfs): snapshots
+		 * then include the home directories, and restoring a snapshot restores
+		 * them together with the system. */
+
+		if (home_subvolume_name.length > 0){
+			return false;
+		}
+
+		Posix.Stat st_root;
+		if (Posix.stat("/", out st_root) != 0){
+			return false;
+		}
+
+		// every subvolume and every mounted filesystem has a device number of
+		// its own; a symlinked /home is not checked (like in snapshots)
+		if (FileUtils.test("/home", FileTest.IS_SYMLINK)){
+			return false;
+		}
+		Posix.Stat st_home;
+		if (Posix.stat("/home", out st_home) != 0){
+			return false;
+		}
+		if (!Posix.S_ISDIR(st_home.st_mode) || (st_home.st_dev != st_root.st_dev)){
+			return false;
+		}
+
+		// the home directories can still be subvolumes or mounts of their own
+		foreach(string name in dir_list_names("/home")){
+			string item = path_combine("/home", name);
+			if (FileUtils.test(item, FileTest.IS_SYMLINK)){ continue; }
+			Posix.Stat st;
+			if (Posix.stat(item, out st) != 0){ continue; }
+			if (st.st_dev != st_root.st_dev){ continue; }
+			if (Posix.S_ISDIR(st.st_mode) && dir_is_empty(item)){ continue; }
+			return true;
+		}
+
+		return false;
 	}
 
 	public bool mount_target_devices(Gtk.Window? parent_win = null){
