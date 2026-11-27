@@ -118,6 +118,14 @@ public class AppConsole : GLib.Object {
 
 		App = new Main(args, false);
 		parse_arguments(args);
+
+		// called by the Debian package when it is installed (debian/postinst):
+		// exit_app() writes or removes the cron files and the hook of the package
+		// manager according to the settings, nothing else is done
+		if (App.app_mode == "update-hooks"){
+			App.exit_app(0);
+		}
+
 		App.initialize();
 		
 		var console =  new AppConsole();
@@ -262,6 +270,12 @@ public class AppConsole : GLib.Object {
 
 				case "--list-targets":
 					App.app_mode = "list-targets";
+					LOG_TIMESTAMP = false;
+					LOG_DEBUG = false;
+					break;
+
+				case "--update-hooks":
+					App.app_mode = "update-hooks";
 					LOG_TIMESTAMP = false;
 					LOG_DEBUG = false;
 					break;

@@ -1,0 +1,15 @@
+#!/bin/sh
+set -e
+
+# Timeshift writes the hook of the package manager and its cron files from its
+# settings. After going back to an older version and updating again, they are
+# missing: postrm removed them on the downgrade, and the older version's
+# scheduled task removed its cron file. Nothing else would run Timeshift to
+# write them again, so let it do that now (not in a chroot, e.g. an installer).
+if [ "$1" = "configure" ] && [ -x /usr/bin/timeshift ] && ! ischroot; then
+	/usr/bin/timeshift --update-hooks >/dev/null 2>&1 || true
+fi
+
+#DEBHELPER#
+
+exit 0

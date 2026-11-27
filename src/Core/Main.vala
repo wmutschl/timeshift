@@ -898,6 +898,10 @@ public class Main : GLib.Object{
 					app_mode = "replicate";
 					break;
 
+				case "--update-hooks":
+					app_mode = "update-hooks";
+					break;
+
 				case "--list":
 				case "--list-snapshots":
 					app_mode = "list-snapshots";
