@@ -67,7 +67,7 @@ It is strongly recommended to use BTRFS snapshots on systems that are installed 
 
 * At most one snapshot is created every 5 minutes, so that a large upgrade or unattended-upgrades (which run dpkg several times) create one snapshot.
 
-* The oldest snapshots are removed by the hourly task when there are more than the number to keep. To keep a snapshot, change its comment (editing the tags in `info.json` has no effect).
+* The oldest snapshots are removed by the hourly task when there are more than the number to keep. To keep a snapshot, change its comment (editing the tags in `info.json` has no effect). The generated comment doesn't keep a snapshot, also not when an older version has tagged it hourly or daily.
 
 * To skip the snapshot for one operation: `sudo TIMESHIFT_SKIP_SNAPSHOT=1 apt install ...`
 
@@ -79,7 +79,7 @@ It is strongly recommended to use BTRFS snapshots on systems that are installed 
 
 * Going back to an older version: Timeshift 26.11.0 to 26.11.2 drop the tags they don't know and would remove these snapshots as untagged. Their `info.json` therefore also has the tag `ondemand` (`compat-tags` marks it as a stand-in, `extra-tags` lists the real tags these versions drop), so older versions show them as on-demand snapshots and keep them until you delete them. After updating again they are snapshots before package operations again.
 
-* The Debian package removes the hook when it is replaced by a version that doesn't support it, and writes it again when it is updated again. If you installed Timeshift otherwise (e.g. with `meson install`), or with DNF, uncheck *Packages* before going back to an older version. If you open the settings of an older version, it removes the options it doesn't know from `timeshift.json`: after updating again, check *Packages* and the number to keep again.
+* The Debian package removes the hook when it is replaced by a version that doesn't support it, and writes it again when it is updated again. If you installed Timeshift otherwise (e.g. with `meson install`), or with DNF, uncheck *Packages* before going back to an older version. The window of an older version rewrites `timeshift.json` whenever it is closed and drops the options it doesn't know: *Packages*, its number to keep, and the subvolumes selected for snapshots and restores. After updating again, set them again in the settings. Until then no snapshots are created before package operations, the default number to keep (5) applies, and additional subvolumes are not included in snapshots.
 
 ### Copies on Other Disks (BTRFS Replication)
 
@@ -253,7 +253,7 @@ The root filesystem must be mounted from a subvolume (e.g. **@** or **root**). S
 
 *grub-btrfs* also lists the read-only snapshots that Timeshift keeps for replication. To hide them, add `"timeshift-btrfs/send-cache"` to `GRUB_BTRFS_IGNORE_PREFIX_PATH` in `/etc/default/grub-btrfs/config`.
 
-*grub-btrfs* shows the tags of a snapshot as stored in `info.json`, so snapshots before package operations have the type `ondemand package` (the `ondemand` is the stand-in for older versions). To hide them, add exactly `"ondemand package"` to `GRUB_BTRFS_IGNORE_SNAPSHOT_TYPE`.
+*grub-btrfs* shows the tags of a snapshot as stored in `info.json`, so snapshots before package operations have the type `ondemand package` (the `ondemand` is the stand-in for older versions). To hide them, add `"ondemand package"` to `GRUB_BTRFS_IGNORE_SNAPSHOT_TYPE`. It compares the whole string: snapshots that are also tagged daily (`"daily ondemand package"`) or whose tags an older version wrote back (`"ondemand"`, `"hourly ondemand"`) need their own entries.
 
 #### Disk Space
 
