@@ -648,6 +648,16 @@ public class SnapshotRepo : GLib.Object{
 		last_snapshot_failed_space = false;
 		DateTime now = new DateTime.now_local();
 		DateTime dt_limit;
+
+		// snapshots whose info.json doesn't protect their tags against older
+		// versions yet, e.g. written by a build before SnapshotTags
+		foreach(var snap in snapshots){
+			if (snap.needs_tags_update){
+				log_debug("Updating the tags in info.json of %s".printf(snap.name));
+				snap.update_control_file();
+				snap.needs_tags_update = false;
+			}
+		}
 		
 		// remove tags from older backups - boot ---------------
 

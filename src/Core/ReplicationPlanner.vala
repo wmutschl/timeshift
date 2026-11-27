@@ -27,7 +27,7 @@ public class ReplicationItem : GLib.Object {
 
 	public string name = "";       // snapshot name, e.g. 2026-11-26_12-00-00
 	public int64 created = 0;      // unix time
-	public string tags = "";       // e.g. "daily weekly" (as stored in info.json)
+	public string tags = "";       // e.g. "daily weekly", as Snapshot.taglist (never with the stand-in of SnapshotTags)
 	public bool on_source = false; // the snapshot exists on the snapshot device
 	public bool on_target = false; // a complete copy exists on the target
 

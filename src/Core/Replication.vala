@@ -901,7 +901,7 @@ public class Replication : GLib.Object {
 			if (!sources.has_key(name)){
 				var info = replicas[name];
 				int64 created = int64.parse(json_get_string(info, "created", "0"));
-				items.add(new ReplicationItem(name, created, Snapshot.read_taglist(info), false, true));
+				items.add(new ReplicationItem(name, created, SnapshotTags.read(info), false, true));
 			}
 		}
 
@@ -942,7 +942,7 @@ public class Replication : GLib.Object {
 		if (!dry_run){
 			foreach(string name in replicas.keys){
 				if (sources.has_key(name)){
-					if (Snapshot.read_taglist(replicas[name]) != sources[name].taglist){
+					if (SnapshotTags.read(replicas[name]) != sources[name].taglist){
 						copy_info_json(sources[name], path_combine(conn.snapshots_dir, name));
 					}
 				}

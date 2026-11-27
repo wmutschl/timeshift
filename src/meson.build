@@ -24,6 +24,7 @@ sources_core = files([
   'Core/Replication.vala',
   'Core/ReplicationPlanner.vala',
   'Core/Snapshot.vala',
+  'Core/SnapshotTags.vala',
   'Core/SnapshotRepo.vala',
   'Core/Subvolume.vala',
   'Core/Tags.vala',

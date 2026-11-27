@@ -38,3 +38,25 @@ replication_planner_test = executable(
 )
 
 test('replication-planner', replication_planner_test)
+
+tags_source = configure_file(
+  input: '../src/Core/Tags.vala',
+  output: 'Tags.vala',
+  copy: true,
+)
+
+snapshot_tags_source = configure_file(
+  input: '../src/Core/SnapshotTags.vala',
+  output: 'SnapshotTags.vala',
+  copy: true,
+)
+
+snapshot_tags_test = executable(
+  'snapshot-tags-test',
+  files('SnapshotTagsTest.vala'),
+  tags_source,
+  snapshot_tags_source,
+  dependencies: test_dependencies + [dependency('json-glib-1.0')],
+)
+
+test('snapshot-tags', snapshot_tags_test)
