@@ -686,20 +686,29 @@ public class Main : GLib.Object{
 			return _("Only subvolumes on the system partition are supported");
 		}
 
-		if (subvolume_has_active_swapfile(subvol)){
-			return _("Subvolumes with an active swap file cannot be snapshotted");
+		if (subvolume_has_swapfile(subvol)){
+			return _("Subvolumes with a swap file cannot be snapshotted");
 		}
 
 		return "";
 	}
 
-	public bool subvolume_has_active_swapfile(Subvolume subvol){
+	public bool subvolume_has_swapfile(Subvolume subvol){
 
-		/* btrfs refuses to snapshot a subvolume that contains an active swap file.
-		 * A swap file belongs to the subvolume with the longest mount point
-		 * that is a prefix of its path. */
+		/* btrfs refuses to snapshot a subvolume that contains an active swap file,
+		 * and a swap file whose extents are shared with a snapshot can't be
+		 * activated again. So the swap files of /etc/fstab count as well, e.g.
+		 * /swap/swapfile in @swap while swap is off. A swap file belongs to the
+		 * subvolume with the longest mount point that is a prefix of its path. */
 
-		foreach(string swap_path in get_active_swap_files()){
+		var swap_files = get_active_swap_files();
+		foreach(string path in get_fstab_swap_files()){
+			if (!swap_files.contains(path)){
+				swap_files.add(path);
+			}
+		}
+
+		foreach(string swap_path in swap_files){
 
 			string best_match = "";
 
@@ -718,6 +727,23 @@ public class Main : GLib.Object{
 		}
 
 		return false;
+	}
+
+	private Gee.ArrayList<string> get_fstab_swap_files(){
+
+		// swap files in /etc/fstab (swap partitions are device paths)
+
+		var list = new Gee.ArrayList<string>();
+
+		foreach(var entry in FsTabEntry.read_file("/etc/fstab")){
+			if (entry.is_comment || entry.is_empty_line || (entry.type != "swap")){ continue; }
+			string path = entry.device_string.replace("\\040", " ");
+			if (path.has_prefix("/") && !path.has_prefix("/dev/")){
+				list.add(path);
+			}
+		}
+
+		return list;
 	}
 
 	private Gee.ArrayList<string> get_active_swap_files(){
