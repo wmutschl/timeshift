@@ -1797,6 +1797,7 @@ public class Main : GLib.Object{
 		}
 		else{
 			message = _("Failed to create snapshot");
+			status = false;
 		}
 
 		log_msg(message);
@@ -2129,6 +2130,7 @@ public class Main : GLib.Object{
 				log_error(_("btrfs returned an error") + ": %d".printf(ret_val));
 				log_error(_("Failed to create subvolume snapshot") + ": %s".printf(subvol_name));
 				remove_incomplete_btrfs_snapshot(snapshot_subvols, snapshot_paths);
+				dir_empty_delete(snapshot_path); // don't leave an empty snapshot directory behind
 				return null;
 			}
 			else{
