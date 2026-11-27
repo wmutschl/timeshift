@@ -4954,19 +4954,35 @@ public class Main : GLib.Object{
 		
 		if (live_system()) { return; }
 
-		// snapshots before package manager transactions, BTRFS mode only
-		PackageManagerHooks.update(btrfs_mode && (Tags.Package in schedule));
-
-		// copies of the snapshots on other filesystems, BTRFS mode only
-		bool replicate = false;
-		foreach(var target in replication_targets){
-			replicate = replicate || target.enabled;
+		// the executable of this process was replaced, e.g. by an older version
+		// while the window was open: don't write files that call the new binary
+		// with options it may not know, leave them as they are
+		bool exe_replaced = false;
+		try{
+			exe_replaced = FileUtils.read_link("/proc/self/exe").has_suffix(" (deleted)");
 		}
-		if (btrfs_mode && replicate){
-			CronTab.add_script_file("timeshift-replicate", "d", "30 * * * * root timeshift --replicate --scripted", stop_cron_emails);
+		catch (FileError e){
+			log_debug(e.message);
+		}
+
+		if (exe_replaced){
+			log_debug("The executable was replaced, the package manager hook and the replication cron file are not changed");
 		}
 		else{
-			CronTab.remove_script_file("timeshift-replicate", "d");
+			// snapshots before package manager transactions, BTRFS mode only
+			PackageManagerHooks.update(btrfs_mode && (Tags.Package in schedule));
+
+			// copies of the snapshots on other filesystems, BTRFS mode only
+			bool replicate = false;
+			foreach(var target in replication_targets){
+				replicate = replicate || target.enabled;
+			}
+			if (btrfs_mode && replicate){
+				CronTab.add_script_file("timeshift-replicate", "d", "30 * * * * root timeshift --replicate --scripted", stop_cron_emails);
+			}
+			else{
+				CronTab.remove_script_file("timeshift-replicate", "d");
+			}
 		}
 
 		// remove entries created by previous versions -----------
