@@ -369,6 +369,17 @@ public class SnapshotRepo : GLib.Object{
 			}
 		}
 
+		// info.json files that don't protect their tags against older versions
+		// yet, e.g. written by a build before SnapshotTags: rewrite them in every
+		// mode. The APT transaction that installs an older version runs only the
+		// package manager hook of this version before it is replaced.
+		foreach(var bak in snapshots){
+			if (bak.needs_tags_update){
+				log_debug("Updating the tags in info.json of %s".printf(bak.name));
+				bak.update_control_file();
+			}
+		}
+
 		if (btrfs_mode){
 			App.query_subvolume_info(this);
 		}
@@ -649,15 +660,6 @@ public class SnapshotRepo : GLib.Object{
 		DateTime now = new DateTime.now_local();
 		DateTime dt_limit;
 
-		// snapshots whose info.json doesn't protect their tags against older
-		// versions yet, e.g. written by a build before SnapshotTags
-		foreach(var snap in snapshots){
-			if (snap.needs_tags_update){
-				log_debug("Updating the tags in info.json of %s".printf(snap.name));
-				snap.update_control_file();
-				snap.needs_tags_update = false;
-			}
-		}
 		
 		// remove tags from older backups - boot ---------------
 

@@ -438,6 +438,8 @@ public class Snapshot : GLib.Object{
 				// replaces the file atomically, never delete it first: a snapshot
 				// without info.json is considered invalid and gets removed
 				json.to_file(ctl_file);
+
+				needs_tags_update = false;
 			}
 		} catch (Error e) {
 			log_error (e.message);
