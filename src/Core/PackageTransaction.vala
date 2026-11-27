@@ -266,6 +266,10 @@ public class PackageTransaction : GLib.Object {
 
 		result = result.replace(" : ", ": ");
 
+		// grub-btrfs puts the comment into a single-quoted GRUB menu title and
+		// splits columns at '|': an apostrophe would break its menu
+		result = result.replace("'", "\u2019").replace("|", "\u00a6");
+
 		return result.strip();
 	}
 

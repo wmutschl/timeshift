@@ -99,6 +99,8 @@ void test_sanitize(){
 	assert(PackageTransaction.from_command_line("apt install a : b").get_comment() == "Before apt install a: b");
 	assert(PackageTransaction.from_command_line("apt install a\tb").get_comment() == "Before apt install a b");
 	assert(PackageTransaction.from_command_line("dnf install https://user:secret@example.com/x.rpm").get_comment() == "Before dnf install https://***@example.com/x.rpm");
+	// grub-btrfs uses the comment in a single-quoted GRUB menu title and splits columns at '|'
+	assert(PackageTransaction.from_command_line("apt install ./Bob's|tool.deb").get_comment() == "Before apt install ./Bob\u2019s\u00a6tool.deb");
 }
 
 void test_truncate(){
