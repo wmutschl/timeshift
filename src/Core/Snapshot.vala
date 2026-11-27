@@ -557,6 +557,14 @@ public class Snapshot : GLib.Object{
 		}
 	}
 
+	// a comment that the user wrote or changed, not the one generated for a
+	// package operation
+	public bool has_user_comment {
+		get {
+			return (description.strip().length > 0) && ((package_comment.length == 0) || (description != package_comment));
+		}
+	}
+
 	public void remove_control_file(){
 		
 		string ctl_file = path + "/info.json";

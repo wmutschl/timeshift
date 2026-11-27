@@ -729,7 +729,8 @@ public class SnapshotRepo : GLib.Object{
 
 				foreach(var snap in list){
 
-					if (snap.description.strip().length > 0){ continue; } // don't delete snapshots with comments
+					// keep snapshots with a comment of the user (not the one generated for a package operation)
+					if (snap.has_user_comment){ continue; }
 					
 					if ((snap.date.compare(dt_limit) < 0) && (snaps_count > count_limit)){
 
