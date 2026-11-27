@@ -528,29 +528,6 @@ public class Snapshot : GLib.Object{
 		}
 	}
 
-	public void write_package_comment(string comment){
-
-		package_comment = comment;
-
-		try{
-			string ctl_file = path + "/info.json";
-			var parser = new Json.Parser();
-			parser.load_from_file(ctl_file);
-			var node = parser.get_root();
-			var config = node.get_object();
-			config.set_string_member("package-comment", comment);
-			var json = new Json.Generator();
-			json.pretty = true;
-			json.indent = 2;
-			node.set_object(config);
-			json.set_root(node);
-			json.to_file(ctl_file);
-		}
-		catch (Error e){
-			log_error(e.message);
-		}
-	}
-
 	// a snapshot before a package operation whose comment the user changed is
 	// kept by the retention; a comment that was only cleared doesn't count
 	public bool package_comment_edited {
@@ -575,7 +552,8 @@ public class Snapshot : GLib.Object{
 	
 	public static Snapshot write_control_file(
 		string snapshot_path, DateTime dt_created, string root_uuid, string distro_full_name, 
-		Tags tags, string comments, int64 item_count, bool is_btrfs, bool is_live, SnapshotRepo repo, bool silent = false){
+		Tags tags, string comments, int64 item_count, bool is_btrfs, bool is_live, SnapshotRepo repo, bool silent = false,
+		string package_comment = ""){
 			
 		var ctl_path = snapshot_path + "/info.json";
 		var config = new Json.Object();
@@ -587,6 +565,11 @@ public class Snapshot : GLib.Object{
 		config.set_string_member("file_count", item_count.to_string());
 		SnapshotTags.write(config, tags, "");
 		config.set_string_member("comments", comments);
+		if (package_comment.length > 0){
+			// the generated comment of a snapshot before a package operation, in the
+			// same write as the tags: a comment without it counts as the user's
+			config.set_string_member("package-comment", package_comment);
+		}
 		config.set_string_member("live", is_live.to_string());
 		config.set_string_member("type", (is_btrfs ? "btrfs" : "rsync"));
 

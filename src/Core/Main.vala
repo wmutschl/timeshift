@@ -2148,7 +2148,8 @@ public class Main : GLib.Object{
 		// write control file
 		var snapshot = Snapshot.write_control_file(
 			snapshot_path, dt_created, sys_uuid, current_distro.full_name(),
-			tags, cmd_comments, 0, true, false, repo);
+			tags, cmd_comments, 0, true, false, repo, false,
+			(app_mode == "package-hook") ? cmd_comments : "");
 
 		// write subvolume info, only for the subvolumes in this snapshot
 		foreach(var subvol in snapshot_subvols){
@@ -2167,10 +2168,6 @@ public class Main : GLib.Object{
 		}
 
 		snapshot.write_boot_info(Posix.utsname().release, boot_in_snapshot);
-
-		if (app_mode == "package-hook"){
-			snapshot.write_package_comment(cmd_comments);
-		}
 		
 		// Perform any post-backup actions
 		this.run_post_backup_hooks(snapshot_path);
