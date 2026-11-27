@@ -167,6 +167,52 @@ public class Snapshot : GLib.Object{
 		}
 	}
 
+	/*
+	 * Timeshift 26.11.0 to 26.11.2 drop the tags they don't know and remove
+	 * snapshots without tags. So that a downgrade to one of these versions
+	 * doesn't remove the snapshots before package operations, their info.json
+	 * also has the tag "ondemand" (on-demand snapshots are never removed
+	 * automatically), and "compat-tags" says that it is only a stand-in.
+	 * These versions keep keys they don't know but write back only the tags
+	 * they know, so "compat-tags" also restores the tag "package".
+	 */
+	private const string COMPAT_TAGS = "compat-tags";
+
+	// the tags of a snapshot from its info.json (also of copies on replication targets)
+	public static string read_taglist(Json.Object config){
+
+		string list = json_get_string(config, "tags", "");
+
+		if (!(Tags.OnDemand.name() in json_get_string(config, COMPAT_TAGS, "").split(" "))){
+			return list;
+		}
+
+		string real = "";
+		foreach(string tag in list.split(" ")){
+			string name = tag.strip().down();
+			if ((name.length > 0) && (name != Tags.OnDemand.name()) && (name != Tags.Package.name())){
+				real += " " + tag.strip();
+			}
+		}
+
+		return (real + " " + Tags.Package.name()).strip();
+	}
+
+	// writes the tags to info.json, list: the names of the tags, including unknown ones
+	public static void write_taglist(Json.Object config, Tags tags, string list){
+
+		if ((Tags.Package in tags) && !(Tags.OnDemand in tags)){
+			config.set_string_member("tags", (Tags.OnDemand.name() + " " + list).strip());
+			config.set_string_member(COMPAT_TAGS, Tags.OnDemand.name());
+		}
+		else{
+			config.set_string_member("tags", list);
+			if (config.has_member(COMPAT_TAGS)){
+				config.remove_member(COMPAT_TAGS);
+			}
+		}
+	}
+
 	/* if at_least_on_demand is true and no tags are set, set Tags.OnDemand */
 	public void add_tag(Tags tag, bool at_least_on_demand = false){
 		if (!(tag in this.tags) || at_least_on_demand){
@@ -221,7 +267,7 @@ public class Snapshot : GLib.Object{
 
 			sys_uuid = json_get_string(config,"sys-uuid","");
 			sys_distro = json_get_string(config,"sys-distro","");
-			taglist = json_get_string(config,"tags","");
+			taglist = read_taglist(config);
 			description = json_get_string(config,"comments","");
 			app_version = json_get_string(config,"app-version","");
 			file_count = (int64) json_get_uint64(config,"file_count",file_count);
@@ -429,7 +475,7 @@ public class Snapshot : GLib.Object{
 				var node = parser.get_root();
 				var config = node.get_object();
 
-				config.set_string_member("tags", taglist);
+				write_taglist(config, tags, taglist);
 				config.set_string_member("comments", description);
 				config.set_string_member("live", live.to_string());
 
@@ -582,7 +628,7 @@ public class Snapshot : GLib.Object{
 		config.set_string_member("sys-distro", distro_full_name);
 		config.set_string_member("app-version", AppVersion);
 		config.set_string_member("file_count", item_count.to_string());
-		config.set_string_member("tags", tags.as_config_string());
+		write_taglist(config, tags, tags.as_config_string());
 		config.set_string_member("comments", comments);
 		config.set_string_member("live", is_live.to_string());
 		config.set_string_member("type", (is_btrfs ? "btrfs" : "rsync"));

@@ -77,6 +77,8 @@ It is strongly recommended to use BTRFS snapshots on systems that are installed 
 
 * If *timeshift-autosnap-apt* is installed, remove it, otherwise two snapshots are created for each operation.
 
+* Going back to an older version: Timeshift 26.11.0 to 26.11.2 don't know these snapshots and would remove them as untagged. Their `info.json` therefore also has the tag `ondemand` (marked as a stand-in by the key `compat-tags`), so older versions show them as on-demand snapshots and keep them until you delete them. After updating again they are snapshots before package operations again. The Debian package removes the hook when the older version doesn't support it.
+
 ### Copies on Other Disks (BTRFS Replication)
 
 * *Settings* > *Replication* sends copies of the snapshots to another BTRFS filesystem: a disk connected to this computer (e.g. a USB disk) or a directory on another computer (SSH). The copies are made with `btrfs send` and `btrfs receive`. After the first copy only the differences are sent.
