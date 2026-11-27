@@ -36,6 +36,13 @@
  * The stand-in exists only in info.json, never in Snapshot.tags or
  * Snapshot.taglist: the retention, the tag symlinks, the scheduler and the
  * replication rely on that.
+ *
+ * Other versions read and write these keys, so their meaning is permanent. A
+ * new tag must not start with b, h, d, w, m or o: 26.11.x maps a name to a tag
+ * by its first letter and would read it as boot, hourly, daily, weekly,
+ * monthly or ondemand (which the stand-in then can't undo). A version that
+ * adds the tag "package" on its own must follow these rules as well, or it
+ * reads the stand-in as a real on-demand tag.
  */
 public class SnapshotTags : GLib.Object {
 
