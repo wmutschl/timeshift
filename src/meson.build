@@ -17,8 +17,14 @@ config_header = configure_file(
 
 sources_core = files([
   'Core/AppExcludeEntry.vala',
+  'Core/BtrfsSendTask.vala',
   'Core/Main.vala',
+  'Core/PackageManagerHooks.vala',
+  'Core/PackageTransaction.vala',
+  'Core/Replication.vala',
+  'Core/ReplicationPlanner.vala',
   'Core/Snapshot.vala',
+  'Core/SnapshotTags.vala',
   'Core/SnapshotRepo.vala',
   'Core/Subvolume.vala',
   'Core/Tags.vala',
@@ -71,6 +77,9 @@ sources_gtk = files([
   'Gtk/FinishBox.vala',
   'Gtk/MainWindow.vala',
   'Gtk/MiscBox.vala',
+  'Gtk/ReplicationBox.vala',
+  'Gtk/ReplicationTargetWindow.vala',
+  'Gtk/ReplicationWindow.vala',
   'Gtk/RestoreBox.vala',
   'Gtk/RestoreDeviceBox.vala',
   'Gtk/RestoreExcludeBox.vala',
@@ -84,6 +93,7 @@ sources_gtk = files([
   'Gtk/SetupWizardWindow.vala',
   'Gtk/SnapshotBackendBox.vala',
   'Gtk/SnapshotListBox.vala',
+  'Gtk/SubvolumeBox.vala',
   'Gtk/UsersBox.vala',
 ])
 

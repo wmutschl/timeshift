@@ -41,6 +41,7 @@ add_project_arguments('-D', 'GTK3_18', language: 'vala')
 subdir('files')
 subdir('src')
 subdir('po')
+subdir('tests')
 
 enable_man = get_option('man')
 if enable_man

@@ -1,0 +1,44 @@
+#!/bin/sh
+set -e
+
+# Timeshift writes these files at runtime when snapshots before package
+# operations or scheduled replication are enabled (see
+# PackageManagerHooks.update() and Main.cron_job_update()). Remove them with
+# the package, otherwise APT and cron keep calling the removed binary. On an
+# upgrade, which is also called for a downgrade, the new binary is already
+# unpacked: remove them if it doesn't know the options anymore (e.g. a
+# version of the distribution without these features). A failing rm must not
+# fail the script: on an upgrade that would abort the downgrade, because the
+# older version has no postrm that dpkg could fall back to.
+remove_apt_hook() {
+	f=/etc/apt/apt.conf.d/80timeshift
+	if [ -f "$f" ] && grep -q "Created by Timeshift" "$f"; then
+		rm -f "$f" || true
+	fi
+}
+
+remove_replication_cron() {
+	f=/etc/cron.d/timeshift-replicate
+	if [ -f "$f" ] && grep -q "timeshift --replicate" "$f"; then
+		rm -f "$f" || true
+	fi
+}
+
+case "$1" in
+	remove|purge)
+		remove_apt_hook
+		remove_replication_cron
+		;;
+	upgrade)
+		if ! LC_ALL=C grep -qa -- "--package-hook" /usr/bin/timeshift 2>/dev/null; then
+			remove_apt_hook
+		fi
+		if ! LC_ALL=C grep -qa -- "--replicate" /usr/bin/timeshift 2>/dev/null; then
+			remove_replication_cron
+		fi
+		;;
+esac
+
+#DEBHELPER#
+
+exit 0

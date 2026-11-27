@@ -8,11 +8,12 @@ public enum Tags {
     Weekly,
     Monthly,
     OnDemand,
+    Package,
 
     First = Boot,
-    Last = OnDemand,
+    Last = Package,
     Timed = Boot | Hourly | Daily | Weekly | Monthly,
-    All = Timed | OnDemand;
+    All = Timed | OnDemand | Package;
 
     /**
         A lowercase short name
@@ -25,6 +26,7 @@ public enum Tags {
             case Weekly: return "weekly";
             case Monthly: return "monthly";
             case OnDemand: return "ondemand";
+            case Package: return "package";
         }
 
         assert_not_reached();
@@ -41,6 +43,7 @@ public enum Tags {
             case Weekly: return _("Weekly");
             case Monthly: return _("Monthly");
             case OnDemand: return _("On demand (manual)");
+            case Package: return _("Packages");
         }
 
         assert_not_reached();
@@ -57,6 +60,7 @@ public enum Tags {
             case Weekly: return 'W';
             case Monthly: return 'M';
             case OnDemand: return 'O';
+            case Package: return 'P';
         }
 
         assert_not_reached();
@@ -70,6 +74,7 @@ public enum Tags {
             case 'w': return Weekly;
             case 'm': return Monthly;
             case 'o': return OnDemand;
+            case 'p': return Package;
         }
         return null;
     }

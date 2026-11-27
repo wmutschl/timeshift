@@ -77,6 +77,10 @@ class FinishBox : Gtk.Box{
 			else{
 				msg += bullet + _("Scheduled snapshots are disabled. It's recommended to enable it.") + "\n\n";
 			}
+
+			if (App.btrfs_mode && (Tags.Package in App.schedule)){
+				msg += bullet + _("Snapshots are created before packages are installed, upgraded or removed.") + "\n\n";
+			}
 		}
 
 		msg += bullet + _("System can be rolled-back to a previous date by restoring a snapshot.") + "\n\n";

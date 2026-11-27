@@ -51,6 +51,9 @@ public class AppConsole : GLib.Object {
 
 	public int snapshot_list_start_index = 0;
 
+	// package manager hook mode (--package-hook)
+	private static PackageTransaction? package_transaction = null;
+
 	public static int main (string[] args) {
 		
 		set_locale();
@@ -77,6 +80,36 @@ public class AppConsole : GLib.Object {
 
 		Main.setup_env();
 
+		if ((args.length > 2) && (args[1].down() == "--package-hook")){
+
+			// never keep the package manager waiting for long
+			Posix.alarm(120);
+
+			// read the transaction first: APT waits until the hook has read its input.
+			// Messages go to stderr: the DNF5 actions plugin interprets stdout.
+			string pid_arg = (args.length > 3) ? args[3] : "";
+			package_transaction = PackageManagerHooks.read_transaction(args[2].down(), pid_arg);
+			Posix.dup2(2, 1);
+
+			// nothing may wait for input from the terminal of the package manager
+			int fd = Posix.open("/dev/null", Posix.O_RDONLY);
+			if (fd >= 0){
+				Posix.dup2(fd, 0);
+				Posix.close(fd);
+			}
+
+			string message;
+			if (PackageManagerHooks.should_skip(package_transaction, out message)){
+				if (message.length > 0){
+					stderr.printf("Timeshift: %s\n", message);
+				}
+				return 0;
+			}
+
+			// the package manager shows one line, the details are in the log file
+			LOG_QUIET = true;
+		}
+
 		LOG_ENABLE = false;
 		init_tmp();
 		LOG_ENABLE = true;
@@ -85,6 +118,14 @@ public class AppConsole : GLib.Object {
 
 		App = new Main(args, false);
 		parse_arguments(args);
+
+		// called by the Debian package when it is installed (debian/postinst):
+		// exit_app() writes or removes the cron files and the hook of the package
+		// manager according to the settings, nothing else is done
+		if (App.app_mode == "update-hooks"){
+			App.exit_app(0);
+		}
+
 		App.initialize();
 		
 		var console =  new AppConsole();
@@ -213,6 +254,40 @@ public class AppConsole : GLib.Object {
 					App.parse_cmd_tags(args[++k]);
 					break;
 
+				case "--replicate":
+					LOG_TIMESTAMP = false;
+					LOG_DEBUG = false;
+					App.app_mode = "replicate";
+					break;
+
+				case "--replication-target":
+					App.cmd_replication_target = args[++k];
+					break;
+
+				case "--dry-run":
+					App.cmd_dry_run = true;
+					break;
+
+				case "--list-targets":
+					App.app_mode = "list-targets";
+					LOG_TIMESTAMP = false;
+					LOG_DEBUG = false;
+					break;
+
+				case "--update-hooks":
+					App.app_mode = "update-hooks";
+					LOG_TIMESTAMP = false;
+					LOG_DEBUG = false;
+					break;
+
+				case "--package-hook":
+					LOG_TIMESTAMP = false;
+					LOG_DEBUG = false;
+					App.app_mode = "package-hook";
+					App.cmd_scripted = true;
+					k = args.length; // the remaining arguments belong to the hook
+					break;
+
 				case "--debug":
 					LOG_COMMANDS = true;
 					LOG_DEBUG = true;
@@ -315,6 +390,19 @@ public class AppConsole : GLib.Object {
 				is_success = create_snapshot(true);
 				return is_success;
 
+			case "package-hook":
+				create_package_snapshot();
+				return true; // never fail the package manager
+
+			case "replicate":
+				is_success = replicate();
+				return is_success;
+
+			case "list-targets":
+				LOG_ENABLE = true;
+				list_replication_targets();
+				return true;
+
 			case "list-snapshots":
 				LOG_ENABLE = true;
 
@@ -371,7 +459,7 @@ public class AppConsole : GLib.Object {
 		msg += "  --check                    " + _("Create snapshot if scheduled") + "\n";
 		msg += "  --create                   " + _("Create snapshot (even if not scheduled)") + "\n";
 		msg += "  --comments <string>        " + _("Set snapshot description") + "\n";
-		msg += "  --tags {O,B,H,D,W,M}       " + _("Add tags to snapshot (default: O)") + "\n";;
+		msg += "  --tags {O,B,H,D,W,M,P}     " + _("Add tags to snapshot (default: O)") + "\n";;
 		msg += "\n";
 		msg += _("Restore") + ":\n";
 		msg += "  --restore                  " + _("Restore snapshot") + "\n";
@@ -384,6 +472,12 @@ public class AppConsole : GLib.Object {
 		msg += _("Delete") + ":\n";
 		msg += "  --delete                   " + _("Delete snapshot") + "\n";
 		msg += "  --delete-all               " + _("Delete all snapshots") + "\n";
+		msg += "\n";
+		msg += _("Replication (BTRFS)") + ":\n";
+		msg += "  --replicate                " + _("Send snapshots to the enabled replication targets") + "\n";
+		msg += "  --replication-target <id>  " + _("Send snapshots only to this target (name or ID)") + "\n";
+		msg += "  --dry-run                  " + _("Show what would be sent and removed") + "\n";
+		msg += "  --list-targets             " + _("List replication targets") + "\n";
 		msg += "\n";
 		msg += _("Global") + ":\n";
 		msg += "  --snapshot-device <device> " + _("Specify backup device (default: config)") + "\n";
@@ -613,6 +707,154 @@ public class AppConsole : GLib.Object {
 		select_snapshot_device(false);
 		return App.create_snapshot(ondemand, null);
 	}
+
+	// sends the snapshots to all enabled replication targets, or to the
+	// target given with --replication-target (even if it is disabled)
+	private bool replicate(){
+
+		if (App.live_system()){
+			return true;
+		}
+
+		var targets = new Gee.ArrayList<ReplicationTarget>();
+
+		if (App.cmd_replication_target.length > 0){
+			var target = ReplicationTarget.find(App.replication_targets, App.cmd_replication_target);
+			if (target == null){
+				log_error(_("Replication target not found") + ": '%s'".printf(App.cmd_replication_target));
+				log_error(_("Run 'timeshift --list-targets' to list the targets"));
+				return false;
+			}
+			targets.add(target);
+		}
+		else{
+			foreach(var target in App.replication_targets){
+				if (target.enabled){
+					targets.add(target);
+				}
+			}
+			if (targets.size == 0){
+				log_msg(_("No replication targets are enabled"));
+				return true;
+			}
+		}
+
+		select_snapshot_device(false);
+
+		if (!App.cmd_dry_run){
+			Replication.remove_orphaned_caches(App.replication_targets);
+		}
+
+		bool ok = true;
+		bool changed = false;
+
+		foreach(var target in targets){
+			var replication = new Replication(target);
+			replication.dry_run = App.cmd_dry_run;
+			replication.io_nice = App.cmd_scripted; // scheduled runs
+			replication.skip_unavailable = App.cmd_scripted && (App.cmd_replication_target.length == 0);
+			ok = replication.run() && ok;
+			changed = changed || replication.target_changed;
+		}
+
+		// e.g. the filesystem of an SSH target was recorded
+		if (changed){
+			ReplicationTarget.save_all(App.replication_targets, App.replication_conf_path);
+		}
+
+		return ok;
+	}
+
+	private void list_replication_targets(){
+
+		if (App.replication_targets.size == 0){
+			log_msg(_("No replication targets"));
+			return;
+		}
+
+		string[,] grid = new string[App.replication_targets.size + 1, 5];
+		bool[] right_align = { false, false, false, false, false };
+
+		int row = 0;
+		int col = -1;
+		grid[row, ++col] = _("Name");
+		grid[row, ++col] = _("ID");
+		grid[row, ++col] = _("Scheduled");
+		grid[row, ++col] = _("Location");
+		grid[row, ++col] = _("Last Run");
+		row++;
+
+		foreach(var target in App.replication_targets){
+
+			var status = ReplicationStatus.load(target);
+			string last_run = "";
+			if (status.time > 0){
+				var dt = new DateTime.from_unix_local(status.time);
+				last_run = dt.format("%Y-%m-%d %H:%M") + " " + (status.ok ? _("OK") : _("Failed"));
+			}
+
+			col = -1;
+			grid[row, ++col] = target.name;
+			grid[row, ++col] = target.id;
+			grid[row, ++col] = target.enabled ? _("Yes") : _("No");
+			grid[row, ++col] = target.location;
+			grid[row, ++col] = last_run;
+			row++;
+		}
+
+		print_grid(grid, right_align);
+		log_msg("");
+	}
+
+	// called by the APT and DNF5 hooks before packages are installed, upgraded or removed
+	private void create_package_snapshot(){
+
+		if (!App.btrfs_mode || !(Tags.Package in App.schedule)){
+			return;
+		}
+
+		select_snapshot_device(false);
+
+		if (!App.repo.available()){
+			hook_message(_("No snapshot was created before this package operation") + ": " + App.repo.status_message);
+			return;
+		}
+
+		string sys_uuid = (App.sys_root == null) ? "" : App.sys_root.uuid;
+		int64 now = new DateTime.now_utc().to_unix();
+
+		foreach(var snap in App.repo.snapshots){
+
+			if (snap.live && (snap.sys_uuid == sys_uuid)){
+				hook_message(_("No snapshot was created before this package operation because a restored snapshot becomes active at the next reboot."));
+				return;
+			}
+
+			int64 age = now - snap.date.to_unix();
+			if ((Tags.Package in snap.tags) && (age >= 0) && (age < PackageManagerHooks.MIN_INTERVAL)){
+				hook_message(_("No new snapshot was created before this package operation, the last one was created less than 5 minutes ago."));
+				return;
+			}
+		}
+
+		App.cmd_comments = (package_transaction != null) ? package_transaction.get_comment() : "Before package changes";
+		App.cmd_tags = Tags.Package;
+
+		App.create_snapshot(true, null);
+
+		if (App.last_created_snapshot != null){
+			hook_message(_("Snapshot created before this package operation") + ": %s".printf(App.last_created_snapshot.name));
+		}
+		else{
+			hook_message(_("No snapshot was created before this package operation, see the log file") + ": %s".printf(App.log_file));
+		}
+	}
+
+	// the line that the package manager shows (on stderr, see main())
+	private static void hook_message(string text){
+		stderr.printf("Timeshift: %s\n", text);
+		log_msg(text); // log file
+	}
 	
 	// restore
 	
@@ -704,7 +946,7 @@ public class AppConsole : GLib.Object {
 
 				if (App.btrfs_mode && !App.check_device_for_backup(dev, true)){
 					log_error(_("Selected snapshot device is not a system disk"));
-					log_error(_("Select BTRFS system disk with root subvolume (@)"));
+					log_error(_("Select BTRFS system disk with root subvolume (%s)").printf(App.root_subvolume_name));
 					dev = null;
 				}
 			}

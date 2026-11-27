@@ -48,6 +48,10 @@ public class Snapshot : GLib.Object{
 	public Gee.ArrayList<CryptTabEntry> cryttab_list;
 	public bool valid = true;
 	public bool live = false;
+
+	// comment written by the package manager hook; if the user changed the
+	// comment, the snapshot is kept like other snapshots with comments
+	public string package_comment = "";
 	public bool marked_for_deletion = false;
 	public LinuxDistro distro;
 	public SnapshotRepo repo;
@@ -136,18 +140,22 @@ public class Snapshot : GLib.Object{
 	
 	// manage tags
 	
+	// tags written by a newer version, e.g. "quarterly": they are kept and
+	// written back, so that the snapshot is not removed as untagged and the
+	// newer version still finds them
+	public string unknown_tags = "";
+
+	// info.json doesn't protect the tags against older versions yet, see SnapshotTags
+	public bool needs_tags_update = false;
+
 	public string taglist{
 		owned get{
-			return this.tags.as_config_string();
+			return SnapshotTags.to_list(this.tags, unknown_tags);
 		}
 		set{
-			this.tags = 0;
-			foreach(string tag in value.split(" ")){
-				Tags? parsed = Tags.parse(tag);
-				if (parsed != null){
-					this.tags |= parsed;
-				}
-			}
+			string unknown;
+			this.tags = SnapshotTags.parse(value, out unknown);
+			unknown_tags = unknown;
 		}
 	}
 
@@ -205,62 +213,23 @@ public class Snapshot : GLib.Object{
 
 			sys_uuid = json_get_string(config,"sys-uuid","");
 			sys_distro = json_get_string(config,"sys-distro","");
-			taglist = json_get_string(config,"tags","");
+			taglist = SnapshotTags.read(config);
+			needs_tags_update = SnapshotTags.needs_update(config);
 			description = json_get_string(config,"comments","");
 			app_version = json_get_string(config,"app-version","");
 			file_count = (int64) json_get_uint64(config,"file_count",file_count);
 			live = json_get_bool(config,"live",false);
+			package_comment = config.get_string_member_with_default("package-comment", "") ?? "";
 			string type = config.get_string_member_with_default("type", "rsync");
-
-			string extension = (type == "btrfs") ? "@" : "localhost";
-			distro = LinuxDistro.get_dist_info(path_combine(path, extension));
 
 			//log_debug("repo.mount_path: %s".printf(repo.mount_path));
 
-			if (config.has_member("subvolumes")){
-
-				var subvols = (Json.Object) config.get_object_member("subvolumes");
-
-				foreach(string subvol_name in subvols.get_members()){
-					
-					if ((subvol_name != "@")&&(subvol_name != "@home")){ continue; }
-					
-					paths[subvol_name] = path.replace(repo.mount_path, repo.mount_paths[subvol_name]);
-					
-					var subvol_path = path_combine(paths[subvol_name], subvol_name);
-					
-					if (!dir_exists(subvol_path)){ continue; }
-
-					//log_debug("subvol_path: %s".printf(subvol_path));
-					
-					var subvolume = new Subvolume(subvol_name, subvol_path, "", repo); //subvolumes.get(subvol_name);
-					subvolumes.set(subvol_name, subvolume);
-					
-					int index = -1;
-					
-					foreach(Json.Node jnode in subvols.get_array_member(subvol_name).get_elements()) {
-						
-						string item = jnode.get_string();
-						switch (++index){
-							case 0:
-								subvolume.name = item;
-								break;
-							case 1:
-								subvolume.id = long.parse(item);
-								break;
-							case 2:
-								subvolume.total_bytes = int64.parse(item);
-								break;
-							case 3:
-								subvolume.unshared_bytes = int64.parse(item);
-								break;
-							case 4:
-								subvolume.device_uuid = item.strip();
-								break;
-						}
-					}
-				}
+			if (type == "btrfs"){
+				read_subvolumes(config);
 			}
+
+			string extension = (type == "btrfs") ? root_subvolume_name : "localhost";
+			distro = LinuxDistro.get_dist_info(path_combine(path, extension));
 			
 			string delete_trigger_file = path + "/delete";
 			if (file_exists(delete_trigger_file)){
@@ -272,6 +241,148 @@ public class Snapshot : GLib.Object{
 		}
 		
 		//log_debug("read_control_file(): exit");
+	}
+
+	private void read_subvolumes(Json.Object config){
+
+		/* The subvolumes of a snapshot are read from its own info.json, never
+		 * from the current configuration, so that snapshots taken with another
+		 * subvolume layout can still be listed, restored and deleted.
+		 * 'subvolumes' lists name, id, sizes and device for each subvolume.
+		 * 'mount-points' maps each subvolume to the path where it was mounted
+		 * in the system (written since subvolumes other than / and /home are
+		 * supported). */
+
+		var names = new Gee.ArrayList<string>();
+		var mount_points = new Gee.HashMap<string,string>();
+		Json.Object? subvols = null;
+
+		if (config.has_member("subvolumes")){
+			subvols = config.get_object_member("subvolumes");
+			foreach(string subvol_name in subvols.get_members()){
+				names.add(subvol_name);
+			}
+		}
+
+		if (config.has_member("mount-points")){
+			var mps = config.get_object_member("mount-points");
+			foreach(string subvol_name in mps.get_members()){
+				mount_points[subvol_name] = mps.get_string_member(subvol_name);
+				if (!names.contains(subvol_name)){
+					names.add(subvol_name); // dropped by an older version
+				}
+			}
+		}
+
+		foreach(string subvol_name in names){
+
+			if (!Main.is_valid_subvolume_name(subvol_name)){ continue; }
+
+			paths[subvol_name] = path.replace(repo.mount_path, repo.get_mount_path(subvol_name));
+
+			var subvol_path = path_combine(paths[subvol_name], subvol_name);
+
+			if (!dir_exists(subvol_path)){ continue; }
+
+			//log_debug("subvol_path: %s".printf(subvol_path));
+
+			var subvolume = new Subvolume(subvol_name, subvol_path, "", repo);
+			subvolumes.set(subvol_name, subvolume);
+
+			if (mount_points.has_key(subvol_name)){
+				subvolume.mount_point = mount_points[subvol_name];
+			}
+			else{
+				subvolume.mount_point = guess_mount_point(subvol_name);
+			}
+
+			if ((subvols == null) || !subvols.has_member(subvol_name)){ continue; }
+
+			int index = -1;
+
+			foreach(Json.Node jnode in subvols.get_array_member(subvol_name).get_elements()) {
+
+				string item = jnode.get_string();
+				switch (++index){
+					case 0:
+						// name, same as the key
+						break;
+					case 1:
+						subvolume.id = long.parse(item);
+						break;
+					case 2:
+						subvolume.total_bytes = int64.parse(item);
+						break;
+					case 3:
+						subvolume.unshared_bytes = int64.parse(item);
+						break;
+					case 4:
+						subvolume.device_uuid = item.strip();
+						break;
+				}
+			}
+		}
+	}
+
+	private static string guess_mount_point(string subvol_name){
+
+		// snapshots taken by older versions don't record mount points,
+		// they only contain the subvolumes mounted at / and /home
+
+		if ((subvol_name == "@") || (subvol_name == App.root_subvolume_name)){
+			return "/";
+		}
+		else if ((subvol_name == "@home") || (subvol_name == App.home_subvolume_name)){
+			return "/home";
+		}
+
+		return "";
+	}
+
+	// name of the subvolume that was mounted at /
+	public string root_subvolume_name {
+		owned get {
+			var subvol = get_subvolume_by_mount_point("/");
+			return (subvol != null) ? subvol.name : App.root_subvolume_name;
+		}
+	}
+
+	// true if /home was a directory inside the root subvolume of this snapshot
+	// (e.g. Debian's @rootfs), so restoring it restores the home directories too
+	public bool home_in_root_subvolume {
+		get {
+			if (!btrfs_mode || (get_subvolume_by_mount_point("/home") != null)){
+				return false;
+			}
+			// /home was mounted from a subvolume or partition of its own; files
+			// below its mount point are hidden and not the home directories
+			if (FsTabEntry.find_entry_by_mount_point(fstab_list, "/home") != null){
+				return false;
+			}
+			string home = path_combine(path_combine(path, root_subvolume_name), "home");
+			if (FileUtils.test(home, FileTest.IS_SYMLINK) || !dir_exists(home)){
+				return false;
+			}
+			// nested subvolumes and mount points (e.g. of a home directory with a
+			// subvolume or partition of its own) are empty directories in a snapshot
+			foreach(string name in dir_list_names(home)){
+				string item = path_combine(home, name);
+				if (FileUtils.test(item, FileTest.IS_SYMLINK)){ continue; }
+				if (FsTabEntry.find_entry_by_mount_point(fstab_list, "/home/" + name) != null){ continue; }
+				if (FileUtils.test(item, FileTest.IS_DIR) && dir_is_empty(item)){ continue; }
+				return true;
+			}
+			return false;
+		}
+	}
+
+	public Subvolume? get_subvolume_by_mount_point(string mount_point){
+		foreach(var subvol in subvolumes.values){
+			if (subvol.mount_point == mount_point){
+				return subvol;
+			}
+		}
+		return null;
 	}
 
 	public void read_exclude_list(){
@@ -305,7 +416,7 @@ public class Snapshot : GLib.Object{
 		string fstab_path = path_combine(path, "/localhost/etc/fstab");
 		
 		if (btrfs_mode){
-			fstab_path = path_combine(path, "/@/etc/fstab");
+			fstab_path = path_combine(path_combine(path, root_subvolume_name), "etc/fstab");
 		}
 		
 		fstab_list = FsTabEntry.read_file(fstab_path);
@@ -316,7 +427,7 @@ public class Snapshot : GLib.Object{
 		string crypttab_path = path_combine(path, "/localhost/etc/crypttab");
 		
 		if (btrfs_mode){
-			crypttab_path = path_combine(path, "/@/etc/crypttab");
+			crypttab_path = path_combine(path_combine(path, root_subvolume_name), "etc/crypttab");
 		}
 		
 		cryttab_list = CryptTabEntry.read_file(crypttab_path);
@@ -340,22 +451,12 @@ public class Snapshot : GLib.Object{
 				var node = parser.get_root();
 				var config = node.get_object();
 
-				config.set_string_member("tags", taglist);
+				SnapshotTags.write(config, tags, unknown_tags);
 				config.set_string_member("comments", description);
 				config.set_string_member("live", live.to_string());
 
 				if (btrfs_mode){
-					var subvols = new Json.Object();
-					config.set_object_member("subvolumes",subvols);
-					foreach(var subvol in subvolumes.values){
-						Json.Array arr = new Json.Array();
-						arr.add_string_element(subvol.name);
-						arr.add_string_element(subvol.id.to_string());
-						arr.add_string_element(subvol.total_bytes.to_string());
-						arr.add_string_element(subvol.unshared_bytes.to_string());
-						arr.add_string_element(subvol.device_uuid);
-						subvols.set_array_member(subvol.name,arr);
-					}
+					write_subvolumes(config);
 				}
 				
 				var json = new Json.Generator();
@@ -363,11 +464,112 @@ public class Snapshot : GLib.Object{
 				json.indent = 2;
 				node.set_object(config);
 				json.set_root(node);
-				f.delete();
+				// replaces the file atomically, never delete it first: a snapshot
+				// without info.json is considered invalid and gets removed
 				json.to_file(ctl_file);
+
+				needs_tags_update = false;
 			}
 		} catch (Error e) {
 			log_error (e.message);
+		}
+	}
+
+	private void write_subvolumes(Json.Object config){
+
+		// update the entries of the loaded subvolumes and keep the others,
+		// e.g. a subvolume on a device that is currently not available
+
+		Json.Object subvols = config.has_member("subvolumes") ?
+			config.get_object_member("subvolumes") : new Json.Object();
+
+		Json.Object mount_points = config.has_member("mount-points") ?
+			config.get_object_member("mount-points") : new Json.Object();
+
+		foreach(var subvol in subvolumes.values){
+			Json.Array arr = new Json.Array();
+			arr.add_string_element(subvol.name);
+			arr.add_string_element(subvol.id.to_string());
+			arr.add_string_element(subvol.total_bytes.to_string());
+			arr.add_string_element(subvol.unshared_bytes.to_string());
+			arr.add_string_element(subvol.device_uuid);
+			subvols.set_array_member(subvol.name, arr);
+
+			if (subvol.mount_point.length > 0){
+				mount_points.set_string_member(subvol.name, subvol.mount_point);
+			}
+		}
+
+		config.set_object_member("subvolumes", subvols);
+		config.set_object_member("mount-points", mount_points);
+	}
+
+	/*
+	 * Records which kernels the snapshot can boot, for restoring and for
+	 * boot entries of snapshots: the running kernel, the kernel versions with
+	 * modules in the snapshot (usr/lib/modules of the root subvolume) and
+	 * whether /boot (kernels and initramfs) is part of the snapshot.
+	 */
+	public void write_boot_info(string kernel_running, bool boot_in_snapshot){
+
+		var kernels = new Gee.ArrayList<string>();
+
+		string root_path = path_combine(paths.has_key(root_subvolume_name) ? paths[root_subvolume_name] : path, root_subvolume_name);
+
+		foreach(string modules_dir in new string[] { "usr/lib/modules", "lib/modules" }){
+			string dir = path_combine(root_path, modules_dir);
+			if (!dir_exists(dir)){ continue; }
+			foreach(string name in dir_list_names(dir)){
+				if (!kernels.contains(name)){
+					kernels.add(name);
+				}
+			}
+			break;
+		}
+
+		kernels.sort();
+
+		try{
+			string ctl_file = path + "/info.json";
+			var parser = new Json.Parser();
+			parser.load_from_file(ctl_file);
+			var node = parser.get_root();
+			var config = node.get_object();
+
+			var arr = new Json.Array();
+			foreach(string kernel in kernels){
+				arr.add_string_element(kernel);
+			}
+
+			config.set_string_member("kernel-running", kernel_running);
+			config.set_array_member("kernels", arr);
+			config.set_string_member("boot-in-snapshot", boot_in_snapshot.to_string());
+
+			var json = new Json.Generator();
+			json.pretty = true;
+			json.indent = 2;
+			node.set_object(config);
+			json.set_root(node);
+			json.to_file(ctl_file);
+		}
+		catch (Error e){
+			log_error(e.message);
+		}
+	}
+
+	// a snapshot before a package operation whose comment the user changed is
+	// kept by the retention; a comment that was only cleared doesn't count
+	public bool package_comment_edited {
+		get {
+			return (package_comment.length > 0) && (description.strip().length > 0) && (description != package_comment);
+		}
+	}
+
+	// a comment that the user wrote or changed, not the one generated for a
+	// package operation
+	public bool has_user_comment {
+		get {
+			return (description.strip().length > 0) && ((package_comment.length == 0) || (description != package_comment));
 		}
 	}
 
@@ -379,7 +581,8 @@ public class Snapshot : GLib.Object{
 	
 	public static Snapshot write_control_file(
 		string snapshot_path, DateTime dt_created, string root_uuid, string distro_full_name, 
-		Tags tags, string comments, int64 item_count, bool is_btrfs, bool is_live, SnapshotRepo repo, bool silent = false){
+		Tags tags, string comments, int64 item_count, bool is_btrfs, bool is_live, SnapshotRepo repo, bool silent = false,
+		string package_comment = ""){
 			
 		var ctl_path = snapshot_path + "/info.json";
 		var config = new Json.Object();
@@ -389,8 +592,13 @@ public class Snapshot : GLib.Object{
 		config.set_string_member("sys-distro", distro_full_name);
 		config.set_string_member("app-version", AppVersion);
 		config.set_string_member("file_count", item_count.to_string());
-		config.set_string_member("tags", tags.as_config_string());
+		SnapshotTags.write(config, tags, "");
 		config.set_string_member("comments", comments);
+		if (package_comment.length > 0){
+			// the generated comment of a snapshot before a package operation, in the
+			// same write as the tags: a comment without it counts as the user's
+			config.set_string_member("package-comment", package_comment);
+		}
 		config.set_string_member("live", is_live.to_string());
 		config.set_string_member("type", (is_btrfs ? "btrfs" : "rsync"));
 
@@ -402,11 +610,7 @@ public class Snapshot : GLib.Object{
 		json.set_root(node);
 
 		try{
-			var f = File.new_for_path(ctl_path);
-			if (f.query_exists()){
-				f.delete();
-			}
-
+			// replaces an existing file atomically
 			json.to_file(ctl_path);
 		} catch (Error e) {
 	        log_error (e.message);
@@ -422,12 +626,8 @@ public class Snapshot : GLib.Object{
 	// check
 	
 	public bool has_subvolumes(){
-		foreach(FsTabEntry en in fstab_list){
-			if (en.options.contains("subvol=@")){
-				return true;
-			}
-		}
-		return false;
+		var entry = FsTabEntry.find_entry_by_mount_point(fstab_list, "/");
+		return (entry != null) && (entry.subvolume_name().length > 0);
 	}
 
 	public Gee.ArrayList<Subvolume> subvolumes_sorted {

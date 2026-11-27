@@ -1590,7 +1590,6 @@ public class Device : GLib.Object{
 		 * 
 		 * */
 
-		string cmd = "";
 		string std_out;
 		string std_err;
 		int ret_val;
@@ -1641,15 +1640,16 @@ public class Device : GLib.Object{
 		unmount(mount_point);
 
 		// mount the device -------------------
+		string[] argv;
 		if (mount_options.length > 0){
-			cmd = "mount -o %s \"%s\" \"%s\"".printf(mount_options, device, mount_point);
+			argv = { "mount", "-o", mount_options, device, mount_point };
 		}
 		else{
-			cmd = "mount \"%s\" \"%s\"".printf(device, mount_point);
+			argv = { "mount", device, mount_point };
 		}
-		log_debug("mount command: %s".printf(cmd));
+		log_debug("mount command: %s".printf(argv_to_string(argv)));
 
-		ret_val = exec_sync(cmd, out std_out, out std_err);
+		ret_val = exec_argv_sync(argv, out std_out, out std_err);
 
 		if (ret_val != 0){
 			log_error ("Failed to mount device '%s' at mount point '%s'".printf(device, mount_point));

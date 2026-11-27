@@ -46,7 +46,7 @@ class RestoreWindow : Gtk.Window{
 	private RestoreBox check_box;
 	private RsyncLogBox log_box;
 	private RestoreBox restore_box;
-	private UsersBox users_box;
+	private SubvolumeBox subvolume_box;
 	private RestoreFinishBox restore_finish_box;
 
 	// actions
@@ -111,11 +111,9 @@ class RestoreWindow : Gtk.Window{
 		log_box.margin = 12;
 		notebook.append_page (log_box, label);
 
-		label = new Gtk.Label(_("Users Home"));
-		var exclude_box = new ExcludeBox(this); // dummy - not used
-		users_box = new UsersBox(this, exclude_box, true);
-		users_box.margin = 12;
-		notebook.append_page (users_box, label);
+		label = new Gtk.Label(_("Subvolumes"));
+		subvolume_box = new SubvolumeBox(this, true);
+		notebook.append_page (subvolume_box, label);
 
 		label = new Gtk.Label(_("Summary"));
 		summary_box = new RestoreSummaryBox(this);
@@ -268,9 +266,9 @@ class RestoreWindow : Gtk.Window{
 
 		if (App.btrfs_mode){
 			
-			if (App.snapshot_to_restore.subvolumes.has_key("@home")){
+			if (SubvolumeBox.snapshot_has_optional_subvolumes()){
 				
-				notebook.page = Tabs.USERS;
+				notebook.page = Tabs.SUBVOLUMES;
 			}
 			else {
 				notebook.page = Tabs.SUMMARY;
@@ -346,7 +344,7 @@ class RestoreWindow : Gtk.Window{
 			notebook.page = Tabs.SUMMARY;
 			break;
 
-		case Tabs.USERS:
+		case Tabs.SUBVOLUMES:
 			notebook.page = Tabs.SUMMARY;
 			break;
 
@@ -404,7 +402,7 @@ class RestoreWindow : Gtk.Window{
 		case Tabs.RESTORE_EXCLUDE:
 		case Tabs.EXCLUDE_APPS:
 		case Tabs.SUMMARY:
-		case Tabs.USERS:
+		case Tabs.SUBVOLUMES:
 
 			// cannot go back
 			btn_prev.show();
@@ -479,8 +477,8 @@ class RestoreWindow : Gtk.Window{
 			}
 			break;
 
-		case Tabs.USERS:
-			users_box.refresh();
+		case Tabs.SUBVOLUMES:
+			subvolume_box.refresh();
 			break;
 
 		case Tabs.SUMMARY:
@@ -532,7 +530,7 @@ class RestoreWindow : Gtk.Window{
 		EXCLUDE_APPS = 2,
 		CHECK = 3,
 		SHOW_LOG = 4,
-		USERS = 5,
+		SUBVOLUMES = 5,
 		SUMMARY = 6,
 		RESTORE = 7,
 		FINISH = 8

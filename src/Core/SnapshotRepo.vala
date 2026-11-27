@@ -167,6 +167,15 @@ public class SnapshotRepo : GLib.Object{
 		}
 	}
 	
+	// mount path of the btrfs filesystem that contains the given subvolume,
+	// the snapshot device unless it is the home subvolume on another device
+	public string get_mount_path(string subvol_name){
+		if (mount_paths.has_key(subvol_name) && (mount_paths[subvol_name].length > 0)){
+			return mount_paths[subvol_name];
+		}
+		return mount_path;
+	}
+
 	public string snapshots_path {
 		owned get{
 			return path_combine(timeshift_path, "snapshots");
@@ -191,33 +200,31 @@ public class SnapshotRepo : GLib.Object{
 		if (mount_path.length == 0){
 			return false;
 		}
-
-		// rsync
-		mount_paths["@"] = "";
-		mount_paths["@home"] = "";
 			
 		if (btrfs_mode){
-			
-			mount_paths["@"] = mount_path;
-			mount_paths["@home"] = mount_path; //default
+
+			mount_paths[App.root_subvolume_name] = mount_path;
+			if (App.home_subvolume_name.length > 0){
+				mount_paths[App.home_subvolume_name] = mount_path; //default
+			}
 			device_home = device; //default
 			
 			// mount @home if on different disk -------
 		
-			var repo_subvolumes = Subvolume.detect_subvolumes_for_system_by_path(path_combine(mount_path,"@"), this, parent_window);
+			var repo_subvolumes = Subvolume.detect_subvolumes_for_system_by_path(path_combine(mount_path,App.root_subvolume_name), this, parent_window);
 			
-			if (repo_subvolumes.has_key("@home")){
+			if (App.home_subvolume_name != "" && repo_subvolumes.has_key(App.home_subvolume_name)){
 				
-				var subvol = repo_subvolumes["@home"];
+				var subvol = repo_subvolumes[App.home_subvolume_name];
 				
 				if (subvol.device_uuid != device.uuid){
 					
 					// @home is on a separate device
 					device_home = subvol.get_device();
 					
-					mount_paths["@home"] = unlock_and_mount_device(device_home, App.mount_point_app + "/backup-home");
+					mount_paths[App.home_subvolume_name] = unlock_and_mount_device(device_home, App.mount_point_app + "/backup-home");
 					
-					if (mount_paths["@home"].length == 0){
+					if (mount_paths[App.home_subvolume_name].length == 0){
 						return false;
 					}
 				}
@@ -362,6 +369,17 @@ public class SnapshotRepo : GLib.Object{
 			}
 		}
 
+		// info.json files that don't protect their tags against older versions
+		// yet, e.g. written by a build before SnapshotTags: rewrite them in every
+		// mode. The APT transaction that installs an older version runs only the
+		// package manager hook of this version before it is replaced.
+		foreach(var bak in snapshots){
+			if (bak.needs_tags_update){
+				log_debug("Updating the tags in info.json of %s".printf(bak.name));
+				bak.update_control_file();
+			}
+		}
+
 		if (btrfs_mode){
 			App.query_subvolume_info(this);
 		}
@@ -373,6 +391,16 @@ public class SnapshotRepo : GLib.Object{
 
 	// get tagged snapshots ----------------------------------
 	
+	private Gee.ArrayList<Snapshot> get_package_snapshots_for_removal(){
+		var list = new Gee.ArrayList<Snapshot>();
+		foreach(var snap in get_snapshots_by_tag(Tags.Package)){
+			if (!snap.package_comment_edited){
+				list.add(snap);
+			}
+		}
+		return list;
+	}
+
 	public Gee.ArrayList<Snapshot> get_snapshots_by_tag(Tags tag = 0){
 		
 		var list = new Gee.ArrayList<Snapshot>();
@@ -501,13 +529,26 @@ public class SnapshotRepo : GLib.Object{
 		
 		log_debug("SnapshotRepo: has_btrfs_system()");
 
-		var root_path = path_combine(mount_paths["@"],"@");
+		var root_path = path_combine(mount_path, App.root_subvolume_name);
 		log_debug("root_path=%s".printf(root_path));
 		log_debug("btrfs_mode=%s".printf(btrfs_mode.to_string()));
 		if (btrfs_mode){
-			if (!dir_exists(root_path)){
+
+			bool ok = (mount_path.length > 0) && dir_exists(root_path);
+
+			// When Timeshift does not run on a btrfs system (e.g. in a live session),
+			// snapshots on the device can be restored and deleted even if the root
+			// subvolume has another name than the one Timeshift expects. The names
+			// are taken from each snapshot.
+			if (!ok && (mount_path.length > 0) && !App.system_on_btrfs_subvolume()
+				&& dir_exists(path_combine(mount_path, "timeshift-btrfs/snapshots"))){
+
+				ok = true;
+			}
+
+			if (!ok){
 				status_message = _("Selected snapshot device is not a system disk");
-				status_details = _("Select BTRFS system disk with root subvolume (@)");
+				status_details = _("Select BTRFS system disk with root subvolume (%s)").printf(App.root_subvolume_name);
 				status_code = SnapshotLocationStatus.NO_BTRFS_SYSTEM;
 				log_debug(status_message);
 				return false;
@@ -618,6 +659,7 @@ public class SnapshotRepo : GLib.Object{
 		last_snapshot_failed_space = false;
 		DateTime now = new DateTime.now_local();
 		DateTime dt_limit;
+
 		
 		// remove tags from older backups - boot ---------------
 
@@ -629,6 +671,21 @@ public class SnapshotRepo : GLib.Object{
 				list[0].remove_tag(Tags.Boot);
 				log_msg(_("Snapshot") + " '%s' ".printf(list[0].name) + _("un-tagged") + " '%s'".printf("boot"));
 				list = get_snapshots_by_tag(Tags.Boot);
+			}
+		}
+
+		// remove tags from older backups - package manager --------------
+		// by count only: their comment describes the package operation. Snapshots
+		// whose comment the user changed are kept and are not counted.
+
+		list = get_package_snapshots_for_removal();
+
+		if (list.size > App.count_package){
+			log_msg(_("Maximum backups exceeded for backup level") + " '%s'".printf(Tags.Package.name()));
+			while (list.size > App.count_package){
+				list[0].remove_tag(Tags.Package);
+				log_msg(_("Snapshot") + " '%s' ".printf(list[0].name) + _("un-tagged") + " '%s'".printf(Tags.Package.name()));
+				list = get_package_snapshots_for_removal();
 			}
 		}
 
@@ -674,14 +731,15 @@ public class SnapshotRepo : GLib.Object{
 
 				foreach(var snap in list){
 
-					if (snap.description.strip().length > 0){ continue; } // don't delete snapshots with comments
+					// keep snapshots with a comment of the user (not the one generated for a package operation)
+					if (snap.has_user_comment){ continue; }
 					
 					if ((snap.date.compare(dt_limit) < 0) && (snaps_count > count_limit)){
 
 						snap.remove_tag(level);
 						snaps_count--;
 					
-						log_msg(_("Snapshot") + " '%s' ".printf(list[0].name) + _("un-tagged") + " '%s'".printf(level.name()));
+						log_msg(_("Snapshot") + " '%s' ".printf(snap.name) + _("un-tagged") + " '%s'".printf(level.name()));
 					}
 				}
 			}
@@ -756,9 +814,9 @@ public class SnapshotRepo : GLib.Object{
 		
 		bool show_msg = true;
 
-		// delete untagged snapshots
+		// delete untagged snapshots (never those with tags of a newer version)
 		foreach(Snapshot bak in snapshots){
-			if (bak.tags == 0){
+			if ((bak.tags == 0) && (bak.unknown_tags.length == 0)){
 
 				if (show_msg){
 					log_msg("%s (%s):".printf(_("Removing snapshots"), _("un-tagged")));

@@ -4,7 +4,7 @@ Timeshift for Linux is an application that provides functionality similar to the
 
 In RSYNC mode, snapshots are taken using [rsync](https://rsync.samba.org) and [hard-links](https://en.wikipedia.org/wiki/Hard_link). Common files are shared between snapshots which saves disk space. Each snapshot is a full system backup that can be browsed with a file manager.
 
-In BTRFS mode, snapshots are taken using the in-built features of the BTRFS filesystem. BTRFS snapshots are supported only on BTRFS systems having an Ubuntu-type subvolume layout (with @ and @home subvolumes).
+In BTRFS mode, snapshots are taken using the in-built features of the BTRFS filesystem. BTRFS snapshots are supported on BTRFS systems whose root filesystem is mounted from a subvolume (e.g. @ on Ubuntu and Linux Mint, root on Fedora). The home subvolume and other subvolumes can be included in snapshots.
 
 Timeshift is similar to applications like [rsnapshot](https://www.rsnapshot.org), [BackInTime](https://github.com/bit-team/backintime) and [TimeVault](https://wiki.ubuntu.com/TimeVault) but with different goals. It is designed to protect only system files and settings. User files such as documents, pictures and music are excluded. This ensures that your files remain unchanged when you restore your system to an earlier date. If you need a tool to back up your documents and files please take a look at the excellent [BackInTime](https://github.com/bit-team/backintime) application which is more configurable and provides options for saving user files.  
 
@@ -43,6 +43,7 @@ Nowadays Timeshift is part of the Xapp project which is a collection of cross-DE
     - M: Monthly
     - B: Boot
     - O: On-demand (Manually created)
+    - P: Packages (created before packages are installed, upgraded or removed, BTRFS only)
 
 ![](images/settings_schedule.png)
 
@@ -57,6 +58,48 @@ It is strongly recommended to use BTRFS snapshots on systems that are installed 
   ![](images/settings_rsync.png)
 
   ![](images/settings_btrfs.png)
+
+### Snapshots Before Package Operations (BTRFS)
+
+* Select the level *Packages* in *Settings* > *Schedule* to create a snapshot before APT or DNF installs, upgrades or removes packages: from the terminal, the software updater or a software center (PackageKit, GNOME Software).
+
+* The comment describes the operation, e.g. `Before apt install vlc` or `Before PackageKit: upgrade firefox, thunderbird +3 more`. The package manager shows one line, e.g. `Timeshift: Snapshot created before this package operation: 2026-11-26_20-24-02`.
+
+* At most one snapshot is created every 5 minutes, so that a large upgrade or unattended-upgrades (which run dpkg several times) create one snapshot.
+
+* The oldest snapshots are removed by the hourly task when there are more than the number to keep. To keep a snapshot, change its comment (editing the tags in `info.json` has no effect). The generated comment doesn't keep a snapshot, also not when an older version has tagged it hourly or daily.
+
+* To skip the snapshot for one operation: `sudo TIMESHIFT_SKIP_SNAPSHOT=1 apt install ...`
+
+* The package manager never fails because of Timeshift. If no snapshot can be created, e.g. while the Timeshift window is open, the reason is printed and the operation continues. No snapshots are created in live sessions and in a chroot.
+
+* APT: the hook is `/etc/apt/apt.conf.d/80timeshift`. DNF5 (Fedora 41 and later): the hook is `/etc/dnf/libdnf5-plugins/actions.d/timeshift.actions` and needs the package `libdnf5-plugin-actions`. Timeshift creates and removes these files when the option is changed.
+
+* If *timeshift-autosnap-apt* is installed, remove it, otherwise two snapshots are created for each operation.
+
+* Going back to an older version: Timeshift 26.11.0 to 26.11.2 drop the tags they don't know and would remove these snapshots as untagged. Their `info.json` therefore also has the tag `ondemand` (`compat-tags` marks it as a stand-in, `extra-tags` lists the real tags these versions drop), so older versions show them as on-demand snapshots and keep them until you delete them. After updating again they are snapshots before package operations again.
+
+* The Debian package removes the hook when it is replaced by a version that doesn't support it, and writes it again when it is updated again. If you installed Timeshift otherwise (e.g. with `meson install`), or with DNF, uncheck *Packages* before going back to an older version. The window of an older version rewrites `timeshift.json` whenever it is closed and drops the options it doesn't know: *Packages*, its number to keep, and the subvolumes selected for snapshots and restores. After updating again, set them again in the settings. Until then no snapshots are created before package operations, the default number to keep (5) applies, and additional subvolumes are not included in snapshots.
+
+### Copies on Other Disks (BTRFS Replication)
+
+* *Settings* > *Replication* sends copies of the snapshots to another BTRFS filesystem: a disk connected to this computer (e.g. a USB disk) or a directory on another computer (SSH). The copies are made with `btrfs send` and `btrfs receive`. After the first copy only the differences are sent.
+
+* Each target keeps its own number of snapshots per level, e.g. 12 monthly, 4 weekly, 7 daily and 10 on-demand snapshots. Levels set to 0 are not sent. Older copies are removed from the target, the newest copy is always kept.
+
+* Scheduled targets receive new snapshots every hour (`/etc/cron.d/timeshift-replicate`). A disk that is not connected or a computer that can't be reached is skipped, and nothing is mounted or connected when there are no new snapshots. *Send Now* sends to the selected target right away.
+
+* The copies are stored like on the snapshot device: `<directory>/<hostname>_<uuid>/timeshift-btrfs/snapshots/<snapshot>/` with one read-only subvolume per snapshotted subvolume and the snapshot's `info.json`. They can be browsed to recover files.
+
+* For incremental transfers Timeshift keeps a read-only snapshot of the newest copy of each target in `timeshift-btrfs/send-cache/` on the snapshot device. Removing a target removes its cache.
+
+* Encrypted disks must be unlocked first, e.g. by the desktop when the disk is connected.
+
+* SSH targets: Timeshift uses its own key, `/etc/timeshift/ssh/id_ed25519`, which is created by the target dialog. Add the public key to `~/.ssh/authorized_keys` of the user on the remote computer. The directory must be on a BTRFS filesystem. The commands on the remote computer must run as root: use the root account, or a user that may run `btrfs`, `mkdir`, `mv`, `rm`, `rmdir` and `tee` with sudo without a password (option *Use sudo on the remote computer*). Note that these commands give the user full access to the remote computer. The host key is accepted at the first connection (*Test Connection* shows its fingerprint). The filesystem of the directory is recorded at the first connection as well, nothing is sent if the directory is on another filesystem later, e.g. when the backup disk of the remote computer is not mounted.
+
+* Command line: `timeshift --replicate` sends to all scheduled targets, `--replication-target <name>` to one target, `--dry-run` shows what would be sent and removed, `--list-targets` lists the targets with the result of their last run.
+
+* The targets are stored in `/etc/timeshift/replication.json`.
 
 ### User Data is Excluded by Default
 Timeshift is designed to protect system files and settings. It is NOT a backup tool and is not meant to protect user data. Entire contents of users' home directories are excluded by default. This has two advantages:
@@ -110,22 +153,13 @@ Incomplete snapshots don't show up in the restore list and are deleted when the 
 
 - **BTRFS** - OS installed on BTRFS volumes (with or without LUKS)
 
-  - Only Ubuntu-type layouts with **@** and **@home** subvolumes are supported
-  - **@** and **@home** subvolumes may be on same or different BTRFS volumes
-  - **@** may be on BTRFS volume and **/home** may be mounted on non-BTRFS partition
-  - If swap files are used they should not be located in **@** or **@home** and could instead be stored in their own subvolume, eg **@swap**
+  - The root filesystem must be mounted from a subvolume, e.g. **@** (Ubuntu, Linux Mint) or **root** (Fedora). The subvolumes are detected from the mount points, their names don't matter
+  - The home subvolume and other subvolumes on the same BTRFS volume that are mounted from `/etc/fstab` (e.g. `/boot`, `/var` or `/var/log`) can be included in snapshots, and each of them can be selected for restore
+  - The home subvolume may also be on a different BTRFS volume, and **/home** may be mounted on a non-BTRFS partition
+  - If **/home** is neither a subvolume nor a partition of its own (e.g. Debian with its single subvolume **@rootfs**), the home directories are part of the root subvolume: every snapshot includes them, and restoring a snapshot restores them as well. The Subvolumes tab of the settings and the restore window point this out. To restore the system without the home directories, move them to a subvolume of their own (e.g. **@home**) that is mounted at **/home** from `/etc/fstab`
+  - If swap files are used they should not be located in a subvolume that is included in snapshots and could instead be stored in their own subvolume, eg **@swap**. Subvolumes with a swap file (active, or listed in `/etc/fstab`) are skipped: btrfs cannot snapshot a subvolume with an active swap file, and a swap file that shares its extents with a snapshot cannot be activated
   - Separate partitions (e.g. `/boot`) can be handled via custom created hooks (placed in `/etc/timeshift/backup-hooks.d/` and `/etc/timeshift/restore-hooks.d/`). Script naming must match `run-parts` [requirements](https://manpages.ubuntu.com/manpages/noble/man8/run-parts.8.html). Current snapshot path is exported as `TS_SNAPSHOT_PATH`.
-  - Other layouts are not supported
-  - Make sure, that you have selected subvolume *@* or */@* for root. You can check that executing script below, and if output is *OK*, then everything is alright.
-
-    ```shell
-    grep -E '^[^#].+/\s+btrfs' /etc/fstab | \
-    grep -oE 'subvol=[^,]+' | \
-    cut -d= -f2 | \
-    grep -qE '^/?@$' && \
-    echo 'OK' || \
-    echo 'Not OK'
-    ```
+  - Layouts that run the system from the top-level subvolume (e.g. the default of the Ubuntu 24.04 desktop installer) or from nested subvolumes (e.g. openSUSE) are not supported
 
   - Default BTRFS subvolume must be /. You can make it using script below.
 
@@ -207,12 +241,20 @@ depending on your package management system.
 
 Remember to delete all snapshots before un-installing. Otherwise the snapshots continue to occupy space on your system.  To delete all snapshots, run the application, select all snapshots from the list (CTRL+A) and click the _Delete_ button on the toolbar. This will delete all snapshots and remove the _/timeshift_ folder in the root directory.     
 
+In BTRFS mode, also uncheck *Packages* in *Settings* > *Schedule* and remove the targets in *Settings* > *Replication* before un-installing. Timeshift then removes the hook of the package manager (`/etc/apt/apt.conf.d/80timeshift` or `/etc/dnf/libdnf5-plugins/actions.d/timeshift.actions`) and `/etc/cron.d/timeshift-replicate`. The Debian package removes them as well.
+
 ## Known Issues & Limitations
 
 #### BTRFS volumes
-BTRFS volumes must have an Ubuntu-type layout with **@** and **@home** subvolumes. Other layouts are not supported. Systems having the **@** subvolume and having **/home** on a non-BTRFS partition are also supported.
+The root filesystem must be mounted from a subvolume (e.g. **@** or **root**). Systems that run from the top-level subvolume of the BTRFS volume are not supported. Systems having the root subvolume and having **/home** on a non-BTRFS partition are also supported.
 
-`Text file busy / btrfs returned an error: 256 / Failed to create snapshot` can occur if you have a Linux swapfile mounted within the **@** or **@home** subvolumes which prevents snapshot from succeeding. Relocate the swapfile out of **@** or **@home*, for example into it's own subvolume like **@swap**.
+`Text file busy / btrfs returned an error: 256 / Failed to create snapshot` can occur if you have a Linux swapfile mounted within a subvolume that is included in snapshots, which prevents snapshot from succeeding. Relocate the swapfile into its own subvolume, for example **@swap**.
+
+#### grub-btrfs
+
+*grub-btrfs* also lists the read-only snapshots that Timeshift keeps for replication. To hide them, add `"timeshift-btrfs/send-cache"` to `GRUB_BTRFS_IGNORE_PREFIX_PATH` in `/etc/default/grub-btrfs/config`.
+
+*grub-btrfs* shows the tags of a snapshot as stored in `info.json`, so snapshots before package operations have the type `ondemand package` (the `ondemand` is the stand-in for older versions). To hide them, add `"ondemand package"` to `GRUB_BTRFS_IGNORE_SNAPSHOT_TYPE`. It compares the whole string: snapshots that are also tagged daily (`"daily ondemand package"`) or whose tags an older version wrote back (`"ondemand"`, `"hourly ondemand"`) need their own entries.
 
 #### Disk Space
 
